@@ -1,5 +1,5 @@
 use leptos::prelude::*;
-use leptos_meta::{provide_meta_context, Stylesheet, Title};
+use leptos_meta::{provide_meta_context, Stylesheet};
 use leptos_router::{
     components::{Route, Router, Routes},
     StaticSegment, WildcardSegment,
@@ -14,10 +14,6 @@ pub fn App() -> impl IntoView {
         // injects a stylesheet into the document <head>
         // id=leptos means cargo-leptos will hot-reload this stylesheet
         <Stylesheet id="leptos" href="/pkg/vyhledavac-addres.css"/>
-
-        // sets the document title
-        <Title text="Welcome to Leptos"/>
-
         // content for this welcome page
         <Router>
             <main>
@@ -30,16 +26,47 @@ pub fn App() -> impl IntoView {
     }
 }
 
+use leptos::callback::Callback;
+use core_db::Adresa;
+
 /// Renders the home page of your application.
 #[component]
 fn HomePage() -> impl IntoView {
-    // Creates a reactive value to update the button
-    let count = RwSignal::new(0);
-    let on_click = move |_| *count.write() += 1;
+    let address = RwSignal::new(Adresa {
+        kod_adm: 0,
+        kod_obce: 0,
+        nazev_obce: String::new(),
+        kod_momc: None,
+        nazev_momc: None,
+        kod_obvodu_prahy: None,
+        nazev_obvodu_prahy: None,
+        kod_casti_obce: None,
+        nazev_casti_obce: None,
+        kod_ulice: None,
+        nazev_ulice: None,
+        typ_so: String::new(),
+        cislo_domovni: 0,
+        cislo_orientacni: None,
+        znak_cisla_orientacniho: None,
+        psc: String::new(),
+        souradnice_y: None,
+        souradnice_x: None,
+        plati_od: chrono::NaiveDate::from_ymd_opt(2000, 1, 1).unwrap().and_hms_opt(0, 0, 0).unwrap(),
+        search: String::new(),
+    });
 
     view! {
-        <h1>"Welcome to Leptos!"</h1>
-        <button on:click=on_click>"Click Me: " {count}</button>
+        <div class="home-container">
+            <div class="display-area">
+                <crate::components::AddressDisplay
+                    address=Signal::from(address)
+                />
+            </div>
+            <crate::components::SearchInput
+                placeholder="Search addresses..."
+                on_select=Callback::new(move |addr| address.set(addr))
+            />
+        </div>
     }
 }
 

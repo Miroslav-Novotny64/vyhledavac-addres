@@ -47,6 +47,8 @@ async fn main() -> std::io::Result<()> {
                     }
                 }
             })
+            // handle server functions
+            .route("/api/{tail:.*}", leptos_actix::handle_server_fns())
             .app_data(web::Data::new(leptos_options.to_owned()))
         //.wrap(middleware::Compress::default())
     })
