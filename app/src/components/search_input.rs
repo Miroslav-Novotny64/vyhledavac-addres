@@ -48,6 +48,7 @@ pub fn SearchInput(
 ) -> impl IntoView {
     let value = RwSignal::new(String::new());
     let results = RwSignal::new(Vec::<Adresa>::new());
+    let last_request_id = RwSignal::new(0u64);
 
     view! {
         <div class="search-container">
@@ -63,9 +64,15 @@ pub fn SearchInput(
                             results.set(Vec::new());
                             return;
                         }
+
+                        last_request_id.update(|id| *id += 1);
+                        let request_id = last_request_id.get_untracked();
+
                         spawn_local(async move {
                             if let Ok(res) = search_adresa(v).await {
-                                results.set(res);
+                                if last_request_id.get_untracked() == request_id {
+                                    results.set(res);
+                                }
                             }
                         });
                     }

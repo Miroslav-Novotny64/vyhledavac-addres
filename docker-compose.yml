@@ -1,8 +1,7 @@
 services:
   mariadb:
-    image: mariadb:11.4  # Doporučuji LTS verzi
+    image: mariadb:11.4
     container_name: leptos_db
-    restart: always
     environment:
       MARIADB_ROOT_PASSWORD: root_password
       MARIADB_DATABASE: app_db
