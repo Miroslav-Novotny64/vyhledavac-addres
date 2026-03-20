@@ -56,6 +56,7 @@ async fn main() -> Result<()> {
     let pool = create_pool().await.context("Failed to connect to database")?;
 
     sqlx::query(include_str!("../../core/schema.sql")).execute(&pool).await?;
+    sqlx::query("TRUNCATE TABLE adresa").execute(&pool).await?;
 
     import(&pool).await?;
 
@@ -99,13 +100,13 @@ async fn import(pool: &MySqlPool) -> Result<()> {
             }
 
             search_parts.push(record.cislo_domovni.to_string());
-
-            if let Some(orient) = record.cislo_orientacni {
-                search_parts.push(orient.to_string());
-
-                search_parts.push(format!("{}/{}", record.cislo_domovni, orient));
-                search_parts.push(format!("{}/{}", orient, record.cislo_domovni));
-            }
+ 
+             if let Some(orient) = record.cislo_orientacni {
+                 search_parts.push(orient.to_string());
+ 
+                 search_parts.push(format!("{}/{}", record.cislo_domovni, orient));
+                 search_parts.push(format!("{}/{}", orient, record.cislo_domovni));
+             }
 
             search_parts.push(normalize(&record.nazev_obce));
 

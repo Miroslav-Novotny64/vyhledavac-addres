@@ -12,6 +12,8 @@ async fn main() -> std::io::Result<()> {
     let conf = get_configuration(None).unwrap();
     let addr = conf.leptos_options.site_addr;
 
+    let pool = core_db::create_pool().await.expect("Failed to create database pool. Please check if the database is running and the DATABASE_URL is correct.");
+
     HttpServer::new(move || {
         // Generate the list of routes in your Leptos App
         let routes = generate_route_list(App);
@@ -29,7 +31,9 @@ async fn main() -> std::io::Result<()> {
             .service(favicon)
             .leptos_routes(routes, {
                 let leptos_options = leptos_options.clone();
+                let pool = pool.clone();
                 move || {
+                    provide_context(pool.clone());
                     view! {
                         <!DOCTYPE html>
                         <html lang="en">
@@ -50,6 +54,7 @@ async fn main() -> std::io::Result<()> {
             // handle server functions
             .route("/api/{tail:.*}", leptos_actix::handle_server_fns())
             .app_data(web::Data::new(leptos_options.to_owned()))
+            .app_data(web::Data::new(pool.clone()))
         //.wrap(middleware::Compress::default())
     })
     .bind(&addr)?

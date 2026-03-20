@@ -1,36 +1,86 @@
 use leptos::prelude::*;
 use leptos::task::spawn_local;
 use core_db::Adresa;
-
-#[cfg(feature = "ssr")]
-use core_db::create_pool;
-
 #[server]
 pub async fn search_adresa(v: String) -> Result<Vec<Adresa>, ServerFnError> {
     #[cfg(feature = "ssr")]
     {
-        use core_db::{create_pool, normalize, pad_token};
+        use leptos_actix::extract;
+        use actix_web::web::Data;
+        use core_db::{normalize, pad_token};
+        use sqlx::mysql::MySqlPool;
 
-        let pool = create_pool().await.map_err(|e| ServerFnError::new(e.to_string()))?;
+        let pool = extract::<Data<MySqlPool>>().await?.into_inner().clone();
 
-        let prepared_search = normalize(&v)
-            .split_whitespace()
-            .map(|t| pad_token(t))
-            .map(|t| format!("+{}*", t))
-            .collect::<Vec<_>>()
-            .join(" ");
+        let normalized = normalize(&v);
+        let tokens: Vec<&str> = normalized.split_whitespace().collect();
 
-        if prepared_search.is_empty() {
+        if tokens.is_empty() {
             return Ok(Vec::new());
         }
 
-        let results = sqlx::query_as::<_, Adresa>(
-            "SELECT * FROM adresa WHERE MATCH(search) AGAINST(? IN BOOLEAN MODE) LIMIT 20"
-        )
-        .bind(prepared_search)
-        .fetch_all(&pool)
-        .await
-        .map_err(|e| ServerFnError::new(e.to_string()))?;
+        let mut fts_parts = Vec::new();
+        let mut short_numeric = None;
+        for token in &tokens {
+            if token.chars().all(|c| c.is_numeric()) {
+                if token.len() >= 3 {
+                    fts_parts.push(format!("+{}", pad_token(token)));
+                } else if short_numeric.is_none() {
+                    short_numeric = Some(*token);
+                }
+            } else {
+                fts_parts.push(format!("+{}*", token));
+            }
+        }
+
+        let fts_query = fts_parts.join(" ");
+
+        let results = if let Some(num) = short_numeric {
+            let num_val: i32 = num.parse().unwrap_or(0);
+            let num_prefix = format!("{}%", num);
+            
+            let query_str = r#"
+                (
+                    SELECT *, 1 as priority 
+                    FROM adresa 
+                    WHERE (MATCH(search) AGAINST(? IN BOOLEAN MODE) OR ? = '')
+                      AND (cislo_domovni = ? OR cislo_orientacni = ?)
+                    LIMIT 20
+                )
+                UNION ALL
+                (
+                    SELECT *, 2 as priority 
+                    FROM adresa 
+                    WHERE (MATCH(search) AGAINST(? IN BOOLEAN MODE) OR ? = '')
+                      AND (cislo_domovni LIKE ? OR cislo_orientacni LIKE ? OR psc LIKE ?)
+                      AND cislo_domovni != ? AND (cislo_orientacni IS NULL OR cislo_orientacni != ?)
+                    LIMIT 20
+                )
+                ORDER BY priority ASC, cislo_orientacni IS NULL ASC
+                LIMIT 20
+            "#;
+
+            sqlx::query_as::<_, Adresa>(query_str)
+                .bind(&fts_query)
+                .bind(&fts_query)
+                .bind(num_val)
+                .bind(num_val)
+                .bind(&fts_query)
+                .bind(&fts_query)
+                .bind(&num_prefix)
+                .bind(&num_prefix)
+                .bind(&num_prefix)
+                .bind(num_val)
+                .bind(num_val)
+                .fetch_all(&*pool)
+                .await?
+        } else {
+            let query_str = "SELECT * FROM adresa WHERE MATCH(search) AGAINST(? IN BOOLEAN MODE) LIMIT 20";
+            sqlx::query_as::<_, Adresa>(query_str)
+                .bind(&fts_query)
+                .fetch_all(&*pool)
+                .await?
+        };
 
         Ok(results)
     }
@@ -60,7 +110,7 @@ pub fn SearchInput(
                     on:input=move |ev| {
                         let v = event_target_value(&ev);
                         value.set(v.clone());
-                        if v.is_empty() {
+                        if v.len() < 3 {
                             results.set(Vec::new());
                             return;
                         }
@@ -68,13 +118,17 @@ pub fn SearchInput(
                         last_request_id.update(|id| *id += 1);
                         let request_id = last_request_id.get_untracked();
 
-                        spawn_local(async move {
-                            if let Ok(res) = search_adresa(v).await {
-                                if last_request_id.get_untracked() == request_id {
-                                    results.set(res);
-                                }
+                        set_timeout(move || {
+                            if last_request_id.get_untracked() == request_id {
+                                spawn_local(async move {
+                                    if let Ok(res) = search_adresa(v).await {
+                                        if last_request_id.get_untracked() == request_id {
+                                            results.set(res);
+                                        }
+                                    }
+                                });
                             }
-                        });
+                        }, std::time::Duration::from_millis(300));
                     }
                 />
             </div>

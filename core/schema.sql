@@ -22,5 +22,8 @@ CREATE TABLE IF NOT EXISTS adresa (
     search TEXT NOT NULL,
 
     PRIMARY KEY (kod_adm),
-    FULLTEXT INDEX ft_search (search)
+    FULLTEXT INDEX ft_search (search),
+    INDEX idx_cislo_domovni (cislo_domovni),
+    INDEX idx_cislo_orientacni (cislo_orientacni),
+    INDEX idx_psc (psc)
 )
