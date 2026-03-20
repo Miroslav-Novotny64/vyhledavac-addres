@@ -38,19 +38,19 @@ pub async fn search_adresa(v: String) -> Result<Vec<Adresa>, ServerFnError> {
         let results = if let Some(num) = short_numeric {
             let num_val: i32 = num.parse().unwrap_or(0);
             let num_prefix = format!("{}%", num);
-            
+
             let query_str = r#"
                 (
-                    SELECT *, 1 as priority 
-                    FROM adresa 
+                    SELECT *, 1 as priority
+                    FROM adresa
                     WHERE (MATCH(search) AGAINST(? IN BOOLEAN MODE) OR ? = '')
                       AND (cislo_domovni = ? OR cislo_orientacni = ?)
                     LIMIT 20
                 )
                 UNION ALL
                 (
-                    SELECT *, 2 as priority 
-                    FROM adresa 
+                    SELECT *, 2 as priority
+                    FROM adresa
                     WHERE (MATCH(search) AGAINST(? IN BOOLEAN MODE) OR ? = '')
                       AND (cislo_domovni LIKE ? OR cislo_orientacni LIKE ? OR psc LIKE ?)
                       AND cislo_domovni != ? AND (cislo_orientacni IS NULL OR cislo_orientacni != ?)
