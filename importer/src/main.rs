@@ -103,7 +103,7 @@ async fn import(pool: &MySqlPool) -> Result<()> {
  
              if let Some(orient) = record.cislo_orientacni {
                  search_parts.push(orient.to_string());
- 
+
                  search_parts.push(format!("{}/{}", record.cislo_domovni, orient));
                  search_parts.push(format!("{}/{}", orient, record.cislo_domovni));
              }
