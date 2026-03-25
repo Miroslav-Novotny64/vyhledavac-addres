@@ -1,6 +1,7 @@
 use leptos::prelude::*;
 use leptos::task::spawn_local;
 use core_db::Adresa;
+
 #[server]
 pub async fn search_adresa(v: String) -> Result<Vec<Adresa>, ServerFnError> {
     #[cfg(feature = "ssr")]
@@ -20,13 +21,13 @@ pub async fn search_adresa(v: String) -> Result<Vec<Adresa>, ServerFnError> {
         }
 
         let mut fts_parts = Vec::new();
-        let mut short_numerics: Vec<&str> = Vec::new();
+        let mut short_numeric = None;
         for token in &tokens {
             if token.chars().all(|c| c.is_numeric()) {
                 if token.len() >= 3 {
-                    fts_parts.push(format!("+{}*", pad_token(token)));
-                } else if short_numerics.len() < 2 {
-                    short_numerics.push(token);
+                    fts_parts.push(format!("+{}", pad_token(token)));
+                } else if short_numeric.is_none() {
+                    short_numeric = Some(*token);
                 }
             } else {
                 fts_parts.push(format!("+{}*", token));
@@ -35,73 +36,9 @@ pub async fn search_adresa(v: String) -> Result<Vec<Adresa>, ServerFnError> {
 
         let fts_query = fts_parts.join(" ");
 
-        let results = if short_numerics.len() == 2 {
-            let a: i32 = short_numerics[0].parse().unwrap_or(0);
-            let b: i32 = short_numerics[1].parse().unwrap_or(0);
-            let a_str = short_numerics[0];
-            let b_str = short_numerics[1];
-
-            let psc_range = |num: i32, s: &str| -> (String, String) {
-                let padding = 5usize.saturating_sub(s.len());
-                let mult = 10_i32.pow(padding as u32);
-                let lo = num.saturating_mul(mult);
-                let hi = num.saturating_add(1).saturating_mul(mult).saturating_sub(1);
-                (format!("{:05}", lo), format!("{:05}", hi))
-            };
-            let (a_psc_lo, a_psc_hi) = psc_range(a, a_str);
-            let (b_psc_lo, b_psc_hi) = psc_range(b, b_str);
-
-            let query_str = r#"
-                (
-                    SELECT *, 1 as priority
-                    FROM adresa
-                    WHERE (MATCH(search) AGAINST(? IN BOOLEAN MODE) OR ? = '')
-                      AND (
-                          (cislo_domovni = ? AND cislo_orientacni = ?)
-                          OR (cislo_domovni = ? AND cislo_orientacni = ?)
-                      )
-                    LIMIT 20
-                )
-                UNION ALL
-                (
-                    SELECT *, 2 as priority
-                    FROM adresa
-                    WHERE (MATCH(search) AGAINST(? IN BOOLEAN MODE) OR ? = '')
-                      AND (
-                          ((cislo_domovni = ? OR cislo_orientacni = ?) AND psc BETWEEN ? AND ?)
-                          OR ((cislo_domovni = ? OR cislo_orientacni = ?) AND psc BETWEEN ? AND ?)
-                      )
-                      AND NOT (
-                          (cislo_domovni = ? AND cislo_orientacni = ?)
-                          OR (cislo_domovni = ? AND cislo_orientacni = ?)
-                      )
-                    LIMIT 20
-                )
-                ORDER BY priority ASC, cislo_orientacni IS NULL ASC
-                LIMIT 20
-            "#;
-
-            sqlx::query_as::<_, Adresa>(query_str)
-                .bind(&fts_query).bind(&fts_query)
-                .bind(a).bind(b)
-                .bind(b).bind(a)
-                .bind(&fts_query).bind(&fts_query)
-                .bind(a).bind(a).bind(&b_psc_lo).bind(&b_psc_hi)
-                .bind(b).bind(b).bind(&a_psc_lo).bind(&a_psc_hi)
-                .bind(a).bind(b)
-                .bind(b).bind(a)
-                .fetch_all(&*pool)
-                .await?
-
-        } else if let Some(num) = short_numerics.first().copied() {
+        let results = if let Some(num) = short_numeric {
             let num_val: i32 = num.parse().unwrap_or(0);
-
-            let padding = 5usize.saturating_sub(num.len());
-            let multiplier = 10_i32.pow(padding as u32);
-            let psc_lower = num_val.saturating_mul(multiplier);
-            let psc_upper = num_val.saturating_add(1).saturating_mul(multiplier).saturating_sub(1);
-            let psc_lower_str = format!("{:05}", psc_lower);
-            let psc_upper_str = format!("{:05}", psc_upper);
+            let num_prefix = format!("{}%", num);
 
             let query_str = r#"
                 (
@@ -116,7 +53,7 @@ pub async fn search_adresa(v: String) -> Result<Vec<Adresa>, ServerFnError> {
                     SELECT *, 2 as priority
                     FROM adresa
                     WHERE (MATCH(search) AGAINST(? IN BOOLEAN MODE) OR ? = '')
-                      AND psc BETWEEN ? AND ?
+                      AND (cislo_domovni LIKE ? OR cislo_orientacni LIKE ? OR psc LIKE ?)
                       AND cislo_domovni != ? AND (cislo_orientacni IS NULL OR cislo_orientacni != ?)
                     LIMIT 20
                 )
@@ -125,14 +62,19 @@ pub async fn search_adresa(v: String) -> Result<Vec<Adresa>, ServerFnError> {
             "#;
 
             sqlx::query_as::<_, Adresa>(query_str)
-                .bind(&fts_query).bind(&fts_query)
-                .bind(num_val).bind(num_val)
-                .bind(&fts_query).bind(&fts_query)
-                .bind(&psc_lower_str).bind(&psc_upper_str)
-                .bind(num_val).bind(num_val)
+                .bind(&fts_query)
+                .bind(&fts_query)
+                .bind(num_val)
+                .bind(num_val)
+                .bind(&fts_query)
+                .bind(&fts_query)
+                .bind(&num_prefix)
+                .bind(&num_prefix)
+                .bind(&num_prefix)
+                .bind(num_val)
+                .bind(num_val)
                 .fetch_all(&*pool)
                 .await?
-
         } else {
             let query_str = "SELECT * FROM adresa WHERE MATCH(search) AGAINST(? IN BOOLEAN MODE) LIMIT 20";
             sqlx::query_as::<_, Adresa>(query_str)

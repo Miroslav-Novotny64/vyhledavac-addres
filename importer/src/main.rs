@@ -140,7 +140,7 @@ async fn import(pool: &MySqlPool) -> Result<()> {
                 cislo_domovni: record.cislo_domovni,
                 cislo_orientacni: record.cislo_orientacni,
                 znak_cisla_orientacniho: record.znak_cisla_orientacniho,
-                psc: record.psc,
+                psc: record.psc.replace(' ', "").parse().unwrap_or(0),
                 souradnice_y: record.souradnice_y,
                 souradnice_x: record.souradnice_x,
                 plati_od,

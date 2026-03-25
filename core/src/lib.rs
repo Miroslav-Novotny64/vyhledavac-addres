@@ -21,7 +21,7 @@ pub struct Adresa {
     pub cislo_domovni: i32,
     pub cislo_orientacni: Option<i32>,
     pub znak_cisla_orientacniho: Option<String>,
-    pub psc: String,
+    pub psc: i32,
     pub souradnice_y: Option<f64>,
     pub souradnice_x: Option<f64>,
     pub plati_od: NaiveDateTime,

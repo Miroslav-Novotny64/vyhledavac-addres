@@ -22,7 +22,7 @@ chrono = { version = "0.4", features = ["serde"] }
 anyhow = "1.0"
 
 [features]
-csr = ["leptos/csr"]
+default = ["ssr"]
 hydrate = ["leptos/hydrate"]
 ssr = [
   "dep:actix-files",
@@ -34,14 +34,8 @@ ssr = [
   "core-db/ssr",
   "dep:sqlx",
 ]
+csr = ["leptos/csr"]
 
-# Defines a size-optimized profile for the WASM bundle in release mode
-[profile.wasm-release]
-inherits = "release"
-opt-level = 'z'
-lto = true
-codegen-units = 1
-panic = "abort"
 
 [package.metadata.leptos]
 # The name used by wasm-bindgen/cargo-leptos for the JS/WASM bundle. Defaults to the crate name
@@ -69,8 +63,6 @@ end2end-cmd = "npx playwright test"
 end2end-dir = "end2end"
 #  The browserlist query used for optimizing the CSS.
 browserquery = "defaults"
-# The environment Leptos will run in, usually either "DEV" or "PROD"
-env = "DEV"
 # The features to use when compiling the bin target
 #
 # Optional. Can be over-ridden with the command line parameter --bin-features

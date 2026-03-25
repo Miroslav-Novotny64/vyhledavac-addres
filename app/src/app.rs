@@ -48,7 +48,7 @@ fn HomePage() -> impl IntoView {
         cislo_domovni: 0,
         cislo_orientacni: None,
         znak_cisla_orientacniho: None,
-        psc: String::new(),
+        psc: 0,
         souradnice_y: None,
         souradnice_x: None,
         plati_od: chrono::NaiveDate::from_ymd_opt(2000, 1, 1).unwrap().and_hms_opt(0, 0, 0).unwrap(),

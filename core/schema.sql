@@ -14,16 +14,18 @@ CREATE TABLE IF NOT EXISTS adresa (
     cislo_domovni INT NOT NULL,
     cislo_orientacni INT DEFAULT NULL,
     znak_cisla_orientacniho VARCHAR(10) DEFAULT NULL,
-    psc VARCHAR(10) NOT NULL,
+    psc INT NOT NULL,
     souradnice_y DOUBLE DEFAULT NULL,
     souradnice_x DOUBLE DEFAULT NULL,
     plati_od DATETIME NOT NULL,
-    
     search TEXT NOT NULL,
-
     PRIMARY KEY (kod_adm),
     FULLTEXT INDEX ft_search (search),
     INDEX idx_cislo_domovni (cislo_domovni),
     INDEX idx_cislo_orientacni (cislo_orientacni),
-    INDEX idx_psc (psc)
-)
+    INDEX idx_psc (psc),
+    INDEX idx_domovni_orientacni (cislo_domovni, cislo_orientacni),
+    INDEX idx_orientacni_domovni (cislo_orientacni, cislo_domovni),
+    INDEX idx_psc_domovni (psc, cislo_domovni),
+    INDEX idx_psc_orientacni (psc, cislo_orientacni)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;

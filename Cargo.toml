@@ -5,3 +5,16 @@ members = [
     "importer",
 ]
 resolver = "2"
+
+# Defines a size-optimized profile for the WASM bundle in release mode
+[profile.wasm-release]
+inherits = "release"
+opt-level = 'z'
+lto = true
+codegen-units = 1
+panic = "abort"
+
+[profile.release]
+codegen-units = 1
+lto = true
+opt-level = 3
