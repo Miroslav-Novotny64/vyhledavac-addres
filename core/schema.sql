@@ -1,4 +1,5 @@
 CREATE TABLE IF NOT EXISTS adresa (
+    -- definované v csv
     kod_adm INT NOT NULL,
     kod_obce INT NOT NULL,
     nazev_obce VARCHAR(255) NOT NULL,
@@ -18,12 +19,24 @@ CREATE TABLE IF NOT EXISTS adresa (
     souradnice_y DOUBLE DEFAULT NULL,
     souradnice_x DOUBLE DEFAULT NULL,
     plati_od DATETIME NOT NULL,
+
+    -- Dodatečné argumenty
+    ulice_cislo INT DEFAULT NULL,
+    obvod_prahy_cislo INT DEFAULT NULL,
+    domovni_orientacni_klic VARCHAR(32) DEFAULT NULL,
+    orientacni_domovni_klic VARCHAR(32) DEFAULT NULL,
     search TEXT NOT NULL,
+
+    -- indexy
     PRIMARY KEY (kod_adm),
     FULLTEXT INDEX ft_search (search),
     INDEX idx_cislo_domovni (cislo_domovni),
     INDEX idx_cislo_orientacni (cislo_orientacni),
     INDEX idx_psc (psc),
+    INDEX idx_ulice_cislo (ulice_cislo),
+    INDEX idx_obvod_prahy_cislo (obvod_prahy_cislo),
+    INDEX idx_domovni_orientacni_klic (domovni_orientacni_klic),
+    INDEX idx_orientacni_domovni_klic (orientacni_domovni_klic),
     INDEX idx_domovni_orientacni (cislo_domovni, cislo_orientacni),
     INDEX idx_orientacni_domovni (cislo_orientacni, cislo_domovni),
     INDEX idx_psc_domovni (psc, cislo_domovni),
