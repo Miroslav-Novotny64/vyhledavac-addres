@@ -367,14 +367,22 @@ pub async fn search_adresa(v: String) -> Result<Vec<Adresa>, ServerFnError> {
         use sqlx::mysql::MySqlPool;
 
         let pool = extract::<Data<MySqlPool>>().await?.into_inner().clone();
+        search_adresa_impl(&pool, v).await
+    }
+    #[cfg(not(feature = "ssr"))]
+    {
+        let _ = v;
+        Err(ServerFnError::new("Server-side only"))
+    }
+}
 
-        let parsed = parse_input(&v);
-
-        if parsed.is_none() {
-            return Ok(vec![]);
-        }
-
-        let parsed = parsed.unwrap();
+#[cfg(feature = "ssr")]
+pub async fn search_adresa_impl(pool: &sqlx::MySqlPool, v: String) -> Result<Vec<Adresa>, ServerFnError> {
+    let parsed = parse_input(&v);
+    if parsed.is_none() {
+        return Ok(vec![]);
+    }
+    let parsed = parsed.unwrap();
 
         let fts_query = build_fts_query(&parsed.text_tokens);
 
@@ -422,15 +430,9 @@ pub async fn search_adresa(v: String) -> Result<Vec<Adresa>, ServerFnError> {
             q = q.bind(bind);
         }
 
-        let results = q.fetch_all(&*pool).await?;
+    let results = q.fetch_all(pool).await?;
 
-        Ok(results)
-    }
-    #[cfg(not(feature = "ssr"))]
-    {
-        let _ = v;
-        Err(ServerFnError::new("Server-side only"))
-    }
+    Ok(results)
 }
 
 #[component]
