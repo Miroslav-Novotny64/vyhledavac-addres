@@ -9,8 +9,10 @@ use std::collections::HashSet;
 #[cfg(feature = "ssr")]
 struct ParserResult {
     text_tokens: Vec<String>,
-    number_candidates: HashSet<i32>,
-    psc_exact_candidates: HashSet<i32>,
+    number_candidates: Vec<i32>,
+    psc_exact_candidates: Vec<i32>,
+    psc_parts: Vec<(i32, i32)>,
+    slash_pairs: Vec<String>,
 }
 
 #[cfg(feature = "ssr")]
@@ -41,31 +43,40 @@ fn parse_input(raw_input: &str) -> Option<ParserResult> {
 
     let mut text_tokens = vec![];
     let mut num_tokens = vec![];
+    let mut slash_pairs = vec![];
 
     for &token in &tokens {
         if token.chars().all(|c| c.is_ascii_digit()) {
             num_tokens.push(token);
+        } else if token.contains('_') {
+            let parts: Vec<&str> = token.split('_').collect();
+            if parts.len() == 2 && parts[0].chars().all(|c| c.is_ascii_digit()) && parts[1].chars().all(|c| c.is_ascii_digit()) {
+                slash_pairs.push(token.to_string());
+            } else {
+                text_tokens.push(token.to_string());
+            }
         } else {
             text_tokens.push(token.to_string());
         }
     }
 
-    // FTS je povinný
-    if text_tokens.is_empty() {
+    // FTS je povinný jen pokud nemáme jiný silný selektor
+    if text_tokens.is_empty() && slash_pairs.is_empty() {
         return None;
     }
 
-    let mut number_candidates = HashSet::new();
-    let mut psc_exact_candidates = HashSet::new();
+    let mut number_candidates = Vec::new();
+    let mut psc_exact_candidates = Vec::new();
+    let mut psc_parts = Vec::new();
 
     for n in num_tokens {
         if let Ok(value) = n.parse::<i32>() {
             match n.len() {
                 1..=4 => {
-                    number_candidates.insert(value);
+                    number_candidates.push(value);
                 }
                 5 => {
-                    psc_exact_candidates.insert(value);
+                    psc_exact_candidates.push(value);
                 }
                 _ => {}
             }
@@ -76,20 +87,8 @@ fn parse_input(raw_input: &str) -> Option<ParserResult> {
     for window in tokens.windows(2) {
         if window[0].len() == 3 && window[1].len() == 2 {
             if let (Ok(a), Ok(b)) = (window[0].parse::<i32>(), window[1].parse::<i32>()) {
-                psc_exact_candidates.insert(a * 100 + b);
-            }
-        }
-    }
-
-    // Slash pair z původního inputu
-    for raw_token in raw_input.split_whitespace() {
-        if raw_token.contains('/') {
-            let parts: Vec<&str> = raw_token.split('/').collect();
-            if parts.len() == 2 {
-                if let (Ok(a), Ok(b)) = (parts[0].parse::<i32>(), parts[1].parse::<i32>()) {
-                    number_candidates.insert(a);
-                    number_candidates.insert(b);
-                }
+                psc_exact_candidates.push(a * 100 + b);
+                psc_parts.push((a, b));
             }
         }
     }
@@ -98,6 +97,8 @@ fn parse_input(raw_input: &str) -> Option<ParserResult> {
         text_tokens,
         number_candidates,
         psc_exact_candidates,
+        psc_parts,
+        slash_pairs,
     })
 }
 
@@ -119,6 +120,12 @@ fn push_branch(
     fts_query: &str,
     extra_binds: Vec<String>,
 ) {
+    let match_clause = if fts_query.trim().is_empty() {
+        "1=1".to_string()
+    } else {
+        "MATCH(a.search) AGAINST(? IN BOOLEAN MODE)".to_string()
+    };
+
     let sql = format!(
         "SELECT
         a.kod_adm, a.kod_obce, a.nazev_obce, a.kod_momc, a.nazev_momc,
@@ -128,15 +135,17 @@ fn push_branch(
         a.search,
         ? AS priority
       FROM adresa a
-      WHERE MATCH(a.search) AGAINST(? IN BOOLEAN MODE)
+      WHERE {}
         AND ({})
       LIMIT 20",
-        where_filter
+        match_clause, where_filter
     );
 
     branches.push(sql);
     binds.push(priority.to_string());
-    binds.push(fts_query.to_string());
+    if !fts_query.trim().is_empty() {
+        binds.push(fts_query.to_string());
+    }
     binds.extend(extra_binds);
 }
 
@@ -180,16 +189,46 @@ fn backtrack(
     current: &mut Assignment,          // co jsme už použili
     has_praha: bool,                   // Jestli je v textu "praha"
     results: &mut HashSet<Assignment>, // Set se všemi úspěšnými results
+    psc_parts: &[(i32, i32)],
 ) {
     // A) Umístíme přesné psč.
     if let Some(&p) = pscs.first() {
+        let a_part = p / 100;
+        let b_part = p % 100;
+        let is_split_psc = psc_parts.contains(&(a_part, b_part));
+
         if current.psc.is_none() {
             current.psc = Some(p);
             current.psc_is_exact = true;
-            backtrack(nums, &pscs[1..], current, has_praha, results);
+            
+            let mut sub_nums = Vec::new();
+
+            if is_split_psc {
+                let mut a_removed = false;
+                let mut b_removed = false;
+                for &n in nums {
+                    if !a_removed && n == a_part {
+                        a_removed = true;
+                    } else if !b_removed && n == b_part {
+                        b_removed = true;
+                    } else {
+                        sub_nums.push(n);
+                    }
+                }
+            } else {
+                sub_nums = nums.to_vec();
+            }
+
+            backtrack(&sub_nums, &pscs[1..], current, has_praha, results, psc_parts);
+            
             current.psc = None;
             current.psc_is_exact = false;
         }
+
+        if is_split_psc {
+            backtrack(nums, &pscs[1..], current, has_praha, results, psc_parts);
+        }
+
         return;
     }
 
@@ -198,28 +237,28 @@ fn backtrack(
 
         if current.ulice.is_none() {
             current.ulice = Some(n);
-            backtrack(zbytek_cisel, pscs, current, has_praha, results);
+            backtrack(zbytek_cisel, pscs, current, has_praha, results, psc_parts);
             current.ulice = None;
         }
         if current.dom.is_none() {
             current.dom = Some(n);
-            backtrack(zbytek_cisel, pscs, current, has_praha, results);
+            backtrack(zbytek_cisel, pscs, current, has_praha, results, psc_parts);
             current.dom = None;
         }
         if current.ori.is_none() {
             current.ori = Some(n);
-            backtrack(zbytek_cisel, pscs, current, has_praha, results);
+            backtrack(zbytek_cisel, pscs, current, has_praha, results, psc_parts);
             current.ori = None;
         }
         if current.psc.is_none() {
             current.psc = Some(n);
             current.psc_is_exact = false;
-            backtrack(zbytek_cisel, pscs, current, has_praha, results);
+            backtrack(zbytek_cisel, pscs, current, has_praha, results, psc_parts);
             current.psc = None;
         }
         if current.obvod.is_none() && has_praha && n >= 1 && n <= 22 {
             current.obvod = Some(n);
-            backtrack(zbytek_cisel, pscs, current, has_praha, results);
+            backtrack(zbytek_cisel, pscs, current, has_praha, results, psc_parts);
             current.obvod = None;
         }
 
@@ -236,11 +275,17 @@ fn backtrack(
 }
 
 #[cfg(feature = "ssr")]
-fn generate_assignments(nums: &[i32], pscs: &[i32], has_praha: bool) -> Vec<GeneratedCase> {
+fn generate_assignments(
+    nums: &[i32],
+    pscs: &[i32],
+    has_praha: bool,
+    psc_parts: &[(i32, i32)],
+    slash_pairs: &[String],
+) -> Vec<GeneratedCase> {
     let mut results = HashSet::new();
     let mut initial = Assignment::default();
 
-    backtrack(nums, pscs, &mut initial, has_praha, &mut results);
+    backtrack(nums, pscs, &mut initial, has_praha, &mut results, psc_parts);
 
     let mut cases = Vec::new();
     for addr in results {
@@ -290,6 +335,18 @@ fn generate_assignments(nums: &[i32], pscs: &[i32], has_praha: bool) -> Vec<Gene
             score += 250;
         }
 
+        for sp in slash_pairs {
+            let swapped = if let Some((a, b)) = sp.split_once('_') {
+                format!("{}_{}", b, a)
+            } else {
+                sp.to_string()
+            };
+            conds.push("(a.domovni_orientacni_klic = ? OR a.domovni_orientacni_klic = ?)".to_string());
+            binds.push(sp.to_string());
+            binds.push(swapped);
+            score += 900;
+        }
+
         if !conds.is_empty() {
             cases.push(GeneratedCase {
                 where_sql: conds.join(" AND "),
@@ -321,16 +378,18 @@ pub async fn search_adresa(v: String) -> Result<Vec<Adresa>, ServerFnError> {
 
         let fts_query = build_fts_query(&parsed.text_tokens);
 
-        if fts_query.is_empty() {
+        if fts_query.is_empty() && parsed.slash_pairs.is_empty() {
             return Ok(vec![]);
         }
 
         let has_praha = parsed.text_tokens.iter().any(|t| t == "praha");
-        let num_vec: Vec<i32> = parsed.number_candidates.into_iter().collect();
-        let psc_vec: Vec<i32> = parsed.psc_exact_candidates.into_iter().collect();
+        let num_vec: Vec<i32> = parsed.number_candidates.clone();
+        let psc_vec: Vec<i32> = parsed.psc_exact_candidates.clone();
+        let psc_parts = parsed.psc_parts;
+        let slash_pairs = parsed.slash_pairs;
 
         // 1. Vygenerujeme list validních GeneratedCase!
-        let cases = generate_assignments(&num_vec, &psc_vec, has_praha);
+        let cases = generate_assignments(&num_vec, &psc_vec, has_praha, &psc_parts, &slash_pairs);
 
         // TODO: Zde implementuj finální smyčku, která nahradí pevné větve dynamickými.
         // Volání build_priority_branches je pryč.
@@ -348,7 +407,7 @@ pub async fn search_adresa(v: String) -> Result<Vec<Adresa>, ServerFnError> {
             );
         }
 
-        if num_vec.is_empty() && psc_vec.is_empty() {
+        if num_vec.is_empty() && psc_vec.is_empty() && slash_pairs.is_empty() {
             push_branch(&mut branches, &mut binds, 100, "1=1", &fts_query, vec![]);
         }
 

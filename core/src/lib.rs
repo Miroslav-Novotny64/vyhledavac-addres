@@ -54,6 +54,7 @@ pub fn normalize(s: &str) -> String {
             'ú' | 'ů' | 'ü' | 'Ú' | 'Ů' | 'Ü' => Some('u'),
             'ý' | 'Ý' => Some('y'),
             'ž' | 'Ž' => Some('z'),
+            '/' => Some('_'),
             _ if c.is_alphanumeric() => Some(c.to_ascii_lowercase()),
             _ => None,
         };

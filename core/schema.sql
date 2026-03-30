@@ -24,7 +24,6 @@ CREATE TABLE IF NOT EXISTS adresa (
     ulice_cislo INT DEFAULT NULL,
     obvod_prahy_cislo INT DEFAULT NULL,
     domovni_orientacni_klic VARCHAR(32) DEFAULT NULL,
-    orientacni_domovni_klic VARCHAR(32) DEFAULT NULL,
     search TEXT NOT NULL,
 
     -- indexy
@@ -36,9 +35,6 @@ CREATE TABLE IF NOT EXISTS adresa (
     INDEX idx_ulice_cislo (ulice_cislo),
     INDEX idx_obvod_prahy_cislo (obvod_prahy_cislo),
     INDEX idx_domovni_orientacni_klic (domovni_orientacni_klic),
-    INDEX idx_orientacni_domovni_klic (orientacni_domovni_klic),
-    INDEX idx_domovni_orientacni (cislo_domovni, cislo_orientacni),
-    INDEX idx_orientacni_domovni (cislo_orientacni, cislo_domovni),
     INDEX idx_psc_domovni (psc, cislo_domovni),
     INDEX idx_psc_orientacni (psc, cislo_orientacni)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;

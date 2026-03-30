@@ -98,20 +98,9 @@ fn domovni_orientacni_key(domovni: i32, orientacni: Option<i32>, znak: Option<&s
     orientacni.map(|o| {
         let znak = znak.unwrap_or("").trim().to_ascii_lowercase();
         if znak.is_empty() {
-            format!("{domovni}/{o}")
+            format!("{domovni}_{o}")
         } else {
-            format!("{domovni}/{o}{znak}")
-        }
-    })
-}
-
-fn orientacni_domovni_key(domovni: i32, orientacni: Option<i32>, znak: Option<&str>) -> Option<String> {
-    orientacni.map(|o| {
-        let znak = znak.unwrap_or("").trim().to_ascii_lowercase();
-        if znak.is_empty() {
-            format!("{o}/{domovni}")
-        } else {
-            format!("{o}{znak}/{domovni}")
+            format!("{domovni}_{o}{znak}")
         }
     })
 }
@@ -198,8 +187,8 @@ async fn import(pool: &MySqlPool) -> Result<()> {
             append_unique_token(&mut search, &mut seen, record.cislo_domovni.to_string());
             if let Some(orient) = record.cislo_orientacni {
                 append_unique_token(&mut search, &mut seen, orient.to_string());
-                append_unique_token(&mut search, &mut seen, format!("{}/{}", record.cislo_domovni, orient));
-                append_unique_token(&mut search, &mut seen, format!("{}/{}", orient, record.cislo_domovni));
+                append_unique_token(&mut search, &mut seen, format!("{}_{}", record.cislo_domovni, orient));
+                append_unique_token(&mut search, &mut seen, format!("{}_{}", orient, record.cislo_domovni));
             }
 
             if psc > 0 {
@@ -252,7 +241,7 @@ pub async fn insert_batch(pool: &MySqlPool, batch: &[Adresa]) -> Result<()> {
             kod_obvodu_prahy, nazev_obvodu_prahy, kod_casti_obce, nazev_casti_obce,
             kod_ulice, nazev_ulice, typ_so, cislo_domovni, cislo_orientacni,
             znak_cisla_orientacniho, psc,
-            ulice_cislo, obvod_prahy_cislo, domovni_orientacni_klic, orientacni_domovni_klic,
+            ulice_cislo, obvod_prahy_cislo, domovni_orientacni_klic,
             souradnice_y, souradnice_x, plati_od, search
         ) "
     );
@@ -265,11 +254,6 @@ pub async fn insert_batch(pool: &MySqlPool, batch: &[Adresa]) -> Result<()> {
             adresa.kod_obvodu_prahy,
         );
         let domovni_orientacni_klic = domovni_orientacni_key(
-            adresa.cislo_domovni,
-            adresa.cislo_orientacni,
-            adresa.znak_cisla_orientacniho.as_deref(),
-        );
-        let orientacni_domovni_klic = orientacni_domovni_key(
             adresa.cislo_domovni,
             adresa.cislo_orientacni,
             adresa.znak_cisla_orientacniho.as_deref(),
@@ -294,7 +278,6 @@ pub async fn insert_batch(pool: &MySqlPool, batch: &[Adresa]) -> Result<()> {
             .push_bind(ulice_cislo)
             .push_bind(obvod_prahy_cislo)
             .push_bind(domovni_orientacni_klic)
-            .push_bind(orientacni_domovni_klic)
             .push_bind(adresa.souradnice_y)
             .push_bind(adresa.souradnice_x)
             .push_bind(adresa.plati_od)
