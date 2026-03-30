@@ -1,8 +1,8 @@
+#[cfg(feature = "ssr")]
+use core_db::normalize;
+use core_db::Adresa;
 use leptos::prelude::*;
 use leptos::task::spawn_local;
-use core_db::Adresa;
-#[cfg(feature = "ssr")]
-use core_db::{normalize};
 #[cfg(feature = "ssr")]
 use std::collections::HashSet;
 
@@ -11,8 +11,24 @@ struct ParserResult {
     text_tokens: Vec<String>,
     number_candidates: HashSet<i32>,
     psc_exact_candidates: HashSet<i32>,
-    psc_prefix_candidates: HashSet<i32>,
-    slash_pairs: HashSet<(String, String)>,
+}
+
+#[cfg(feature = "ssr")]
+#[derive(Clone, Default, Eq, PartialEq, Hash)]
+struct Assignment {
+    ulice: Option<i32>,
+    dom: Option<i32>,
+    ori: Option<i32>,
+    psc: Option<i32>,
+    psc_is_exact: bool,
+    obvod: Option<i32>,
+}
+
+#[cfg(feature = "ssr")]
+struct GeneratedCase {
+    where_sql: String,
+    binds: Vec<String>,
+    score: i32,
 }
 
 #[cfg(feature = "ssr")]
@@ -41,17 +57,12 @@ fn parse_input(raw_input: &str) -> Option<ParserResult> {
 
     let mut number_candidates = HashSet::new();
     let mut psc_exact_candidates = HashSet::new();
-    let mut psc_prefix_candidates = HashSet::new();
-    let mut slash_pairs = HashSet::new();
 
     for n in num_tokens {
         if let Ok(value) = n.parse::<i32>() {
             match n.len() {
                 1..=4 => {
                     number_candidates.insert(value);
-                    if n.len() >= 2 {
-                        psc_prefix_candidates.insert(value);
-                    }
                 }
                 5 => {
                     psc_exact_candidates.insert(value);
@@ -76,7 +87,6 @@ fn parse_input(raw_input: &str) -> Option<ParserResult> {
             let parts: Vec<&str> = raw_token.split('/').collect();
             if parts.len() == 2 {
                 if let (Ok(a), Ok(b)) = (parts[0].parse::<i32>(), parts[1].parse::<i32>()) {
-                    slash_pairs.insert((parts[0].to_string(), parts[1].to_string()));
                     number_candidates.insert(a);
                     number_candidates.insert(b);
                 }
@@ -88,8 +98,6 @@ fn parse_input(raw_input: &str) -> Option<ParserResult> {
         text_tokens,
         number_candidates,
         psc_exact_candidates,
-        psc_prefix_candidates,
-        slash_pairs,
     })
 }
 
@@ -132,236 +140,15 @@ fn push_branch(
     binds.extend(extra_binds);
 }
 
-/// Sestaví WHERE filtr pro P1 – přesné shody čísel popisných / orientačních.
-///
-/// Pokrývá 4 případy:
-///  1. `cislo_domovni IN (...)` OR `cislo_orientacni IN (...)`
-///  2. `domovni_orientacni_klic IN (...)`  – sestavený klíč "dom_ori"
-///  3. `orientacni_domovni_klic IN (...)`  – swap klíče
-///  4. Explicitní slash páry: (cislo_domovni=a AND cislo_orientacni=b) + swap
-#[cfg(feature = "ssr")]
-fn build_p1_filter(parsed: &ParserResult) -> (String, Vec<String>) {
-    let mut conditions: Vec<String> = vec![];
-    let mut binds: Vec<String> = vec![];
-
-    // 1) cislo_domovni IN (...) OR cislo_orientacni IN (...)
-    // Pouze pokud je jediný kandidát – s více čísly by to matchovalo i neúplné záznamy
-    if parsed.number_candidates.len() == 1 {
-        let placeholders = parsed.number_candidates
-            .iter()
-            .map(|_| "?");
-        let dom_ph = placeholders.clone().collect::<Vec<_>>().join(", ");
-        let ori_ph = placeholders.collect::<Vec<_>>().join(", ");
-
-        conditions.push(format!(
-            "(a.cislo_domovni IN ({dom_ph}) OR a.cislo_orientacni IN ({ori_ph}))"
-        ));
-        for v in &parsed.number_candidates {
-            binds.push(v.to_string());
-        }
-        for v in &parsed.number_candidates {
-            binds.push(v.to_string());
-        }
-    }
-
-    // 2) domovni_orientacni_klic IN (...) – klíč tvaru "12/15"
-    if !parsed.number_candidates.is_empty() {
-        let keys: Vec<String> = parsed.number_candidates
-            .iter()
-            .flat_map(|&a| parsed.number_candidates.iter().map(move |&b| format!("{a}/{b}")))
-            .collect();
-        if !keys.is_empty() {
-            let ph = keys.iter().map(|_| "?").collect::<Vec<_>>().join(", ");
-            conditions.push(format!("a.domovni_orientacni_klic IN ({ph})"));
-            binds.extend(keys.clone());
-        }
-    }
-
-    // 3) orientacni_domovni_klic IN (...) – swap klíče "25/1"
-    if !parsed.number_candidates.is_empty() {
-        let keys: Vec<String> = parsed.number_candidates
-            .iter()
-            .flat_map(|&a| parsed.number_candidates.iter().map(move |&b| format!("{b}/{a}")))
-            .collect();
-        if !keys.is_empty() {
-            let ph = keys.iter().map(|_| "?").collect::<Vec<_>>().join(", ");
-            conditions.push(format!("a.orientacni_domovni_klic IN ({ph})"));
-            binds.extend(keys);
-        }
-    }
-
-    // 4) Explicitní slash páry: (domovni=a AND orientacni=b) OR (domovni=b AND orientacni=a)
-    for (left, right) in &parsed.slash_pairs {
-        conditions.push(format!(
-            "(a.cislo_domovni = ? AND a.cislo_orientacni = ?)"
-        ));
-        binds.push(left.clone());
-        binds.push(right.clone());
-
-        // swap
-        conditions.push(format!(
-            "(a.cislo_domovni = ? AND a.cislo_orientacni = ?)"
-        ));
-        binds.push(right.clone());
-        binds.push(left.clone());
-    }
-
-    let where_clause = if conditions.is_empty() {
-        "1=0".to_string() // žádné číslo ani slash pair => nic nevyhovuje
-    } else {
-        conditions.join(" OR ")
-    };
-
-    (where_clause, binds)
-}
-
-#[cfg(feature = "ssr")]
-fn build_p2_filter(parsed: &ParserResult) -> (String, Vec<String>) {
-    let mut conditions: Vec<String> = vec![];
-    let mut binds: Vec<String> = vec![];
-
-    if !parsed.number_candidates.is_empty() {
-        let ph = parsed.number_candidates
-            .iter()
-            .map(|_| "?")
-            .collect::<Vec<_>>()
-            .join(", ");
-        conditions.push(format!("a.ulice_cislo IN ({ph})"));
-        binds.extend(parsed.number_candidates.iter().map(|&n| n.to_string()));
-    }
-
-    let where_clause = if conditions.is_empty() {
-        "1=0".to_string() // žádné číslo => nic nevyhovuje
-    } else {
-        conditions.join(" OR ")
-    };
-
-    (where_clause, binds)
-}
-
-#[cfg(feature = "ssr")]
-fn build_p3_filter(parsed: &ParserResult) -> (String, Vec<String>) {
-    let mut conditions: Vec<String> = vec![];
-    let mut binds: Vec<String> = vec![];
-
-    // Z number_candidates vybereme jen hodnoty 1–22 (platné obvody Prahy)
-    let obvod_candidates: Vec<i32> = parsed.number_candidates
-        .iter()
-        .copied()
-        .filter(|&n| n >= 1 && n <= 22)
-        .collect();
-
-    if obvod_candidates.is_empty() {
-        return ("1=0".to_string(), vec![]);
-    }
-
-    let ph = obvod_candidates.iter().map(|_| "?").collect::<Vec<_>>().join(", ");
-    conditions.push(format!("a.obvod_prahy_cislo IN ({ph})"));
-    binds.extend(obvod_candidates.iter().map(|n| n.to_string()));
-
-    let where_clause = if conditions.is_empty() {
-        "1=0".to_string() // žádné obvody => nic nevyhovuje
-    } else {
-        conditions.join(" OR ")
-    };
-
-    (where_clause, binds)
-}
-
-#[cfg(feature = "ssr")]
-fn build_p4a_filter(parsed: &ParserResult) -> (String, Vec<String>) {
-    let mut conditions: Vec<String> = vec![];
-    let mut binds: Vec<String> = vec![];
-
-    if !parsed.psc_exact_candidates.is_empty() {
-        let ph = parsed.psc_exact_candidates.iter().map(|_| "?").collect::<Vec<_>>().join(", ");
-        conditions.push(format!("a.psc IN ({ph})"));
-        binds.extend(parsed.psc_exact_candidates.iter().map(|&n| n.to_string()));
-    }
-
-    let where_clause = if conditions.is_empty() {
-        "1=0".to_string() // žádné PSC => nic nevyhovuje
-    } else {
-        conditions.join(" OR ")
-    };
-
-    (where_clause, binds)
-}
-
-#[cfg(feature = "ssr")]
-fn build_p4b_filter(parsed: &ParserResult) -> (String, Vec<String>) {
-    let mut conditions: Vec<String> = vec![];
-    let mut binds: Vec<String> = vec![];
-
-    if !parsed.psc_prefix_candidates.is_empty() {
-        for &n in &parsed.psc_prefix_candidates {
-            let s = n.to_string();
-            let missing = 5 - s.len();
-            conditions.push("a.psc BETWEEN ? AND ?".to_string());
-            binds.push(format!("{}{}", s, "0".repeat(missing)));
-            binds.push(format!("{}{}", s, "9".repeat(missing)));
-        }
-    }
-
-    let where_clause = if conditions.is_empty() {
-        "1=0".to_string() // žádné PSC => nic nevyhovuje
-    } else {
-        conditions.join(" OR ")
-    };
-
-    (where_clause, binds)
-}
-
-#[cfg(feature = "ssr")]
-fn build_priority_branches(parsed: &ParserResult, fts_query: &str) -> (Vec<String>, Vec<String>) {
-    let mut branches: Vec<String> = vec![];
-    let mut binds: Vec<String> = vec![];
-
-    // P1: přesné číslo popisné / orientační (priorita 500)
-    // Aktivuje se, pokud máme alespoň jedno číslo nebo slash pár.
-    if !parsed.number_candidates.is_empty() || !parsed.slash_pairs.is_empty() {
-        let (where_p1, binds_p1) = build_p1_filter(parsed);
-        push_branch(&mut branches, &mut binds, 500, &where_p1, fts_query, binds_p1);
-    }
-
-    // P2: Číslo v názvu ulice (priorita 400)
-    if !parsed.number_candidates.is_empty() {
-        let (where_p2, binds_p2) = build_p2_filter(parsed);
-        push_branch(&mut branches, &mut binds, 400, &where_p2, fts_query, binds_p2);
-    }
-
-    // P3: obvod Prahy, například „Praha 5" (priorita 300)
-    // Aktivuje se jen pokud je token „praha" a číslo v rozsahu 1–22
-    let has_praha = parsed.text_tokens.iter().any(|t| t == "praha");
-    if has_praha && parsed.number_candidates.iter().any(|&n| n >= 1 && n <= 22) {
-        let (where_p3, binds_p3) = build_p3_filter(parsed);
-        push_branch(&mut branches, &mut binds, 300, &where_p3, fts_query, binds_p3);
-    }
-
-    // TODO P4a: PSC exact (priorita 220)
-    if !parsed.psc_exact_candidates.is_empty() {
-        let (where_p4a, binds_p4a) = build_p4a_filter(parsed);
-        push_branch(&mut branches, &mut binds, 400, &where_p4a, fts_query, binds_p4a);
-    }
-    
-    // TODO P4b: PSC prefix/range (priorita 210)
-    if !parsed.psc_prefix_candidates.is_empty() {
-        let (where_p4b, binds_p4b) = build_p4b_filter(parsed);
-        push_branch(&mut branches, &mut binds, 400, &where_p4b, fts_query, binds_p4b);
-    }
-    // P5: fallback FTS – vždy přidat jako záchrannou větev (priorita 100)
-    push_branch(&mut branches, &mut binds, 100, "1=1", fts_query, vec![]);
-
-    (branches, binds)
-}
-
 #[cfg(feature = "ssr")]
 fn build_final_sql(branches: &mut Vec<String>) -> String {
-    let union_sql = branches.iter()
+    let union_sql = branches
+        .iter()
         .map(|b| format!("({})", b))
         .collect::<Vec<_>>()
         .join(" UNION ALL ");
-    let final_sql = format!("
+    let final_sql = format!(
+        "
       SELECT
         kod_adm, kod_obce, nazev_obce, kod_momc, nazev_momc,
         kod_obvodu_prahy, nazev_obvodu_prahy, kod_casti_obce, nazev_casti_obce,
@@ -381,20 +168,149 @@ fn build_final_sql(branches: &mut Vec<String>) -> String {
       WHERE dedup.rn = 1
       ORDER BY dedup.priority DESC
       LIMIT 20
-    ");
+    "
+    );
     return final_sql;
+}
+
+#[cfg(feature = "ssr")]
+fn backtrack(
+    nums: &[i32],                      // Zbytek 1-4ciferných čísel
+    pscs: &[i32],                      // Zbytek 5ciferných PSČ
+    current: &mut Assignment,          // co jsme už použili
+    has_praha: bool,                   // Jestli je v textu "praha"
+    results: &mut HashSet<Assignment>, // Set se všemi úspěšnými results
+) {
+    // A) Umístíme přesné psč.
+    if let Some(&p) = pscs.first() {
+        if current.psc.is_none() {
+            current.psc = Some(p);
+            current.psc_is_exact = true;
+            backtrack(nums, &pscs[1..], current, has_praha, results);
+            current.psc = None;
+            current.psc_is_exact = false;
+        }
+        return;
+    }
+
+    if let Some(&n) = nums.first() {
+        let zbytek_cisel = &nums[1..];
+
+        if current.ulice.is_none() {
+            current.ulice = Some(n);
+            backtrack(zbytek_cisel, pscs, current, has_praha, results);
+            current.ulice = None;
+        }
+        if current.dom.is_none() {
+            current.dom = Some(n);
+            backtrack(zbytek_cisel, pscs, current, has_praha, results);
+            current.dom = None;
+        }
+        if current.ori.is_none() {
+            current.ori = Some(n);
+            backtrack(zbytek_cisel, pscs, current, has_praha, results);
+            current.ori = None;
+        }
+        if current.psc.is_none() {
+            current.psc = Some(n);
+            current.psc_is_exact = false;
+            backtrack(zbytek_cisel, pscs, current, has_praha, results);
+            current.psc = None;
+        }
+        if current.obvod.is_none() && has_praha && n >= 1 && n <= 22 {
+            current.obvod = Some(n);
+            backtrack(zbytek_cisel, pscs, current, has_praha, results);
+            current.obvod = None;
+        }
+
+        return;
+    }
+    let mut c = current.clone();
+
+    if c.dom.is_none() && c.ori.is_some() {
+        c.dom = c.ori;
+        c.ori = None;
+    }
+
+    results.insert(c);
+}
+
+#[cfg(feature = "ssr")]
+fn generate_assignments(nums: &[i32], pscs: &[i32], has_praha: bool) -> Vec<GeneratedCase> {
+    let mut results = HashSet::new();
+    let mut initial = Assignment::default();
+
+    backtrack(nums, pscs, &mut initial, has_praha, &mut results);
+
+    let mut cases = Vec::new();
+    for addr in results {
+        let mut conds = vec![];
+        let mut binds = vec![];
+        let mut score = 0;
+
+        if let Some(u) = addr.ulice {
+            conds.push("a.ulice_cislo = ?".to_string());
+            binds.push(u.to_string());
+            score += 300;
+        }
+        match (addr.dom, addr.ori) {
+            (Some(d), Some(o)) => {
+                conds.push("a.cislo_domovni = ?".to_string());
+                binds.push(d.to_string());
+                conds.push("a.cislo_orientacni = ?".to_string());
+                binds.push(o.to_string());
+                score += 900;
+            }
+            (Some(d), None) => {
+                conds.push("(a.cislo_domovni = ? OR a.cislo_orientacni = ?)".to_string());
+                binds.push(d.to_string());
+                binds.push(d.to_string());
+                score += 400;
+            }
+            _ => {}
+        }
+
+        if let Some(p) = addr.psc {
+            if addr.psc_is_exact {
+                conds.push("a.psc = ?".to_string());
+                binds.push(p.to_string());
+            } else {
+                let s = p.to_string();
+                let missing = 5 - s.len();
+                conds.push("a.psc BETWEEN ? AND ?".to_string());
+                binds.push(format!("{}{}", s, "0".repeat(missing)));
+                binds.push(format!("{}{}", s, "9".repeat(missing)));
+            }
+            score += 200;
+        }
+
+        if let Some(ob) = addr.obvod {
+            conds.push("a.obvod_prahy_cislo = ?".to_string());
+            binds.push(ob.to_string());
+            score += 250;
+        }
+
+        if !conds.is_empty() {
+            cases.push(GeneratedCase {
+                where_sql: conds.join(" AND "),
+                binds,
+                score,
+            });
+        }
+    }
+    cases
 }
 
 #[server]
 pub async fn search_adresa(v: String) -> Result<Vec<Adresa>, ServerFnError> {
     #[cfg(feature = "ssr")]
     {
-        use leptos_actix::extract;
         use actix_web::web::Data;
+        use leptos_actix::extract;
         use sqlx::mysql::MySqlPool;
 
         let pool = extract::<Data<MySqlPool>>().await?.into_inner().clone();
-        
+
         let parsed = parse_input(&v);
 
         if parsed.is_none() {
@@ -409,7 +325,37 @@ pub async fn search_adresa(v: String) -> Result<Vec<Adresa>, ServerFnError> {
             return Ok(vec![]);
         }
 
-        let (mut branches, binds) = build_priority_branches(&parsed, &fts_query);
+        let has_praha = parsed.text_tokens.iter().any(|t| t == "praha");
+        let num_vec: Vec<i32> = parsed.number_candidates.into_iter().collect();
+        let psc_vec: Vec<i32> = parsed.psc_exact_candidates.into_iter().collect();
+
+        // 1. Vygenerujeme list validních GeneratedCase!
+        let cases = generate_assignments(&num_vec, &psc_vec, has_praha);
+
+        // TODO: Zde implementuj finální smyčku, která nahradí pevné větve dynamickými.
+        // Volání build_priority_branches je pryč.
+        let mut branches = vec![];
+        let mut binds = vec![];
+
+        for case in cases {
+            push_branch(
+                &mut branches,
+                &mut binds,
+                case.score,
+                &case.where_sql,
+                &fts_query,
+                case.binds,
+            );
+        }
+
+        if num_vec.is_empty() && psc_vec.is_empty() {
+            push_branch(&mut branches, &mut binds, 100, "1=1", &fts_query, vec![]);
+        }
+
+        if branches.is_empty() {
+            return Ok(vec![]);
+        }
+
         let final_sql = build_final_sql(&mut branches);
 
         let mut q = sqlx::query_as::<_, Adresa>(&final_sql);
@@ -483,30 +429,58 @@ pub fn SearchInput(
                                 .or_else(|| res.nazev_casti_obce.clone())
                                 .unwrap_or_else(|| res.nazev_obce.clone());
 
-                            let numbers = format!("{}{}", 
-                                res.cislo_domovni, 
-                                res.cislo_orientacni.map(|o| format!("/{}", o)).unwrap_or_default()
-                            );
+                            let typ_so = if res.typ_so == "č.ev." { "č.ev. " } else { "" };
 
-                            let city_part = res.nazev_momc.clone()
-                                .or_else(|| res.nazev_casti_obce.clone())
-                                .filter(|name| name != &res.nazev_obce);
+                            let mut numbers = format!("{}{}", typ_so, res.cislo_domovni);
+                            if let Some(o) = res.cislo_orientacni {
+                                let znak = res.znak_cisla_orientacniho.clone().unwrap_or_default();
+                                numbers.push_str(&format!("/{o}{znak}"));
+                            }
 
-                            let location_no_street = match city_part {
-                                Some(part) => format!("{}, {}", part, res.nazev_obce),
-                                None => res.nazev_obce.clone(),
+                            let mut location_parts = Vec::new();
+
+                            let part = res.nazev_momc.clone()
+                                .or_else(|| res.nazev_casti_obce.clone());
+
+                            if let Some(ref p) = part {
+                                if p != &street && p != &res.nazev_obce {
+                                    location_parts.push(p.clone());
+                                }
+                            }
+
+                            if let Some(obvod) = res.nazev_obvodu_prahy.clone() {
+                                if obvod != res.nazev_obce && !location_parts.contains(&obvod) {
+                                    location_parts.push(obvod);
+                                }
+                            }
+
+                            if street != res.nazev_obce {
+                                let obec = &res.nazev_obce;
+                                // Přidáme obec jen pokud tam už není zmíněna (např. v "Praha 4" už "Praha" je)
+                                let obec_already_in_parts = location_parts.iter().any(|p| p.starts_with(obec));
+                                if !obec_already_in_parts {
+                                    location_parts.push(obec.clone());
+                                }
+                            }
+
+                            let location_str = location_parts.join(", ");
+
+                            let psc_str = res.psc.to_string();
+                            let formatted_psc = if psc_str.len() == 5 {
+                                format!("{} {}", &psc_str[0..3], &psc_str[3..5])
+                            } else {
+                                psc_str
                             };
 
-                            let full_address = format!("{} {} {} {}", 
-                                street, 
-                                numbers, 
-                                location_no_street, 
-                                res.psc
-                            ).replace("  ", " ").trim().to_string();
+                            let full_address = if location_str.is_empty() {
+                                format!("{} {}, {}", street, numbers, formatted_psc)
+                            } else {
+                                format!("{} {}, {} {}", street, numbers, location_str, formatted_psc)
+                            };
 
                             let res_clone = res.clone();
                             view! {
-                                <li 
+                                <li
                                     class="address-item"
                                     on:click=move |_| {
                                         on_select.run(res_clone.clone());
