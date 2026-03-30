@@ -3,7 +3,7 @@ use std::collections::HashSet;
 use std::string::String as StdString;
 use anyhow::{Context, Result};
 use sqlx::MySqlPool;
-use core_db::{create_pool, Adresa, normalize};
+use core_db::{create_pool, Adresa, normalize, pad_token};
 
 use encoding_rs::WINDOWS_1250;
 use encoding_rs_io::DecodeReaderBytesBuilder;
@@ -184,11 +184,22 @@ async fn import(pool: &MySqlPool) -> Result<()> {
             append_normalized_tokens(&mut search, &mut seen, record.nazev_momc.as_deref());
             append_normalized_tokens(&mut search, &mut seen, record.nazev_obvodu_prahy.as_deref());
 
-            append_unique_token(&mut search, &mut seen, record.cislo_domovni.to_string());
+            append_unique_token(&mut search, &mut seen, pad_token(&record.cislo_domovni.to_string()));
             if let Some(orient) = record.cislo_orientacni {
-                append_unique_token(&mut search, &mut seen, orient.to_string());
+                append_unique_token(&mut search, &mut seen, pad_token(&orient.to_string()));
+                
+                let znak = record.znak_cisla_orientacniho.as_deref().unwrap_or("").trim();
+                if !znak.is_empty() {
+                    let orient_znak = format!("{}{}", orient, znak);
+                    append_unique_token(&mut search, &mut seen, pad_token(&orient_znak));
+                }
+
                 append_unique_token(&mut search, &mut seen, format!("{}_{}", record.cislo_domovni, orient));
                 append_unique_token(&mut search, &mut seen, format!("{}_{}", orient, record.cislo_domovni));
+
+                if !znak.is_empty() {
+                    append_unique_token(&mut search, &mut seen, format!("{}_{}{}", record.cislo_domovni, orient, znak));
+                }
             }
 
             if psc > 0 {

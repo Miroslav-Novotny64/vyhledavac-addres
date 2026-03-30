@@ -19,7 +19,8 @@ mod tests {
                 .unwrap_or_else(|| res.nazev_obce.clone());
 
             let numbers = if let Some(orient) = res.cislo_orientacni {
-                format!("{}/{}", res.cislo_domovni, orient)
+                let znak = res.znak_cisla_orientacniho.as_deref().unwrap_or("");
+                format!("{}/{}{}", res.cislo_domovni, orient, znak)
             } else {
                 res.cislo_domovni.to_string()
             };
@@ -132,9 +133,51 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn test_orientation_prefix_matching() {
+        let pool = get_test_pool().await;
+        // Test doplňování orientačního čísla (52/1 najde 52/13)
+        let results = search_adresa_impl(&pool, "Rýdlova 52/1".to_string()).await.unwrap();
+        assert_contains_address(&results, "Rýdlova");
+        assert_contains_address(&results, "52/13");
+    }
+
+/*     #[tokio::test]
+    async fn test_orientation_prefix_matching_swapped() {
+        let pool = get_test_pool().await;
+        // Test doplňování orientačního čísla (13/5 najde 52/13)
+        let results = search_adresa_impl(&pool, "Rýdlova 13/5".to_string()).await.unwrap();
+        assert_contains_address(&results, "Rýdlova");
+        assert_contains_address(&results, "52/13");
+    } */
+
+    #[tokio::test]
     async fn test_bad_numbers_return_empty() {
         let pool = get_test_pool().await;
         let results = search_adresa_impl(&pool, "Mírová 999 888".to_string()).await.unwrap();
         assert!(results.is_empty());
+    }
+
+    #[tokio::test]
+    async fn test_alphanumeric_orientation() {
+        let pool = get_test_pool().await;
+        // Test pro adresu s písmenem v orientačním čísle (10a)
+        // Očekáváme, že i když 10a není čisté číslo, Fulltext ji najde v kombinaci s ulicí
+        let results = search_adresa_impl(&pool, "Osadnická 572/10a".to_string()).await.unwrap();
+        
+        assert_contains_address(&results, "Osadnická");
+        assert_contains_address(&results, "572");
+        assert_contains_address(&results, "10a");
+        assert_contains_address(&results, "Havířov");
+    }
+
+    #[tokio::test]
+    async fn test_orientacni_znak() {
+        let pool = get_test_pool().await;
+        let results = search_adresa_impl(&pool, "Osadnická 572 10a Šumbark Havířov 73601".to_string()).await.unwrap();
+        
+        assert_contains_address(&results, "Osadnická");
+        assert_contains_address(&results, "572");
+        assert_contains_address(&results, "10a");
+        assert_contains_address(&results, "Havířov");
     }
 }

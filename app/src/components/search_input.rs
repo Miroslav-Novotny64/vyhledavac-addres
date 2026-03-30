@@ -1,5 +1,5 @@
 #[cfg(feature = "ssr")]
-use core_db::normalize;
+use core_db::{normalize, pad_token};
 use core_db::Adresa;
 use leptos::prelude::*;
 use leptos::task::spawn_local;
@@ -50,7 +50,10 @@ fn parse_input(raw_input: &str) -> Option<ParserResult> {
             num_tokens.push(token);
         } else if token.contains('_') {
             let parts: Vec<&str> = token.split('_').collect();
-            if parts.len() == 2 && parts[0].chars().all(|c| c.is_ascii_digit()) && parts[1].chars().all(|c| c.is_ascii_digit()) {
+            if parts.len() == 2
+                && parts[0].chars().all(|c| c.is_ascii_digit())
+                && parts[1].chars().all(|c| c.is_ascii_digit())
+            {
                 slash_pairs.push(token.to_string());
             } else {
                 text_tokens.push(token.to_string());
@@ -106,10 +109,20 @@ fn parse_input(raw_input: &str) -> Option<ParserResult> {
 fn build_fts_query(text_tokens: &[String]) -> String {
     let mut parts = vec![];
     for t in text_tokens {
-        parts.push(format!("+{}*", t));
+        let is_address_variant = t.chars().next().map_or(false, |c| c.is_ascii_digit()) 
+                              && t.chars().last().map_or(false, |c| c.is_alphabetic());
+        
+        if is_address_variant {
+            let padded = pad_token(t);
+            parts.push(format!("+{}*", padded));
+        } else {
+            parts.push(format!("+{}*", t));
+        }
     }
     parts.join(" ")
 }
+
+
 
 #[cfg(feature = "ssr")]
 fn push_branch(
@@ -191,7 +204,6 @@ fn backtrack(
     results: &mut HashSet<Assignment>, // Set se všemi úspěšnými results
     psc_parts: &[(i32, i32)],
 ) {
-    // A) Umístíme přesné psč.
     if let Some(&p) = pscs.first() {
         let a_part = p / 100;
         let b_part = p % 100;
@@ -200,7 +212,7 @@ fn backtrack(
         if current.psc.is_none() {
             current.psc = Some(p);
             current.psc_is_exact = true;
-            
+
             let mut sub_nums = Vec::new();
 
             if is_split_psc {
@@ -219,8 +231,15 @@ fn backtrack(
                 sub_nums = nums.to_vec();
             }
 
-            backtrack(&sub_nums, &pscs[1..], current, has_praha, results, psc_parts);
-            
+            backtrack(
+                &sub_nums,
+                &pscs[1..],
+                current,
+                has_praha,
+                results,
+                psc_parts,
+            );
+
             current.psc = None;
             current.psc_is_exact = false;
         }
@@ -336,15 +355,45 @@ fn generate_assignments(
         }
 
         for sp in slash_pairs {
-            let swapped = if let Some((a, b)) = sp.split_once('_') {
-                format!("{}_{}", b, a)
-            } else {
-                sp.to_string()
-            };
-            conds.push("(a.domovni_orientacni_klic = ? OR a.domovni_orientacni_klic = ?)".to_string());
-            binds.push(sp.to_string());
-            binds.push(swapped);
-            score += 900;
+            if let Some((first, second)) = sp.split_once('_') {
+                let first_val = first.parse::<i32>().unwrap_or(0);
+                let second_val = second;
+
+                let mut ori_clauses = vec!["a.cislo_orientacni = ?".to_string()];
+                let mut ori_binds = vec![second_val.to_string()];
+                for digits in 1..=3 {
+                    if second_val.len() + digits <= 4 {
+                        let lower = format!("{}{}", second_val, "0".repeat(digits));
+                        let upper = format!("{}{}", second_val, "9".repeat(digits));
+                        ori_clauses.push("a.cislo_orientacni BETWEEN ? AND ?".to_string());
+                        ori_binds.push(lower);
+                        ori_binds.push(upper);
+                    }
+                }
+                let ori_cond = format!("({})", ori_clauses.join(" OR "));
+                let mut case1_binds = vec![first_val.to_string()];
+                case1_binds.extend(ori_binds);
+
+                let mut house_clauses = vec!["a.cislo_domovni = ?".to_string()];
+                let mut house_binds = vec![second_val.to_string()];
+                for digits in 1..=3 {
+                     if second_val.len() + digits <= 4 {
+                         let lower = format!("{}{}", second_val, "0".repeat(digits));
+                         let upper = format!("{}{}", second_val, "9".repeat(digits));
+                         house_clauses.push("a.cislo_domovni BETWEEN ? AND ?".to_string());
+                         house_binds.push(lower);
+                         house_binds.push(upper);
+                     }
+                }
+                let house_cond = format!("({})", house_clauses.join(" OR "));
+                let mut case2_binds = house_binds;
+                case2_binds.push(first.to_string());
+
+                conds.push(format!("((a.cislo_domovni = ? AND {}) OR ({} AND a.cislo_orientacni = ?))", ori_cond, house_cond));
+                binds.extend(case1_binds);
+                binds.extend(case2_binds);
+                score += 900;
+            }
         }
 
         if !conds.is_empty() {
@@ -377,58 +426,58 @@ pub async fn search_adresa(v: String) -> Result<Vec<Adresa>, ServerFnError> {
 }
 
 #[cfg(feature = "ssr")]
-pub async fn search_adresa_impl(pool: &sqlx::MySqlPool, v: String) -> Result<Vec<Adresa>, ServerFnError> {
+pub async fn search_adresa_impl(
+    pool: &sqlx::MySqlPool,
+    v: String,
+) -> Result<Vec<Adresa>, ServerFnError> {
     let parsed = parse_input(&v);
     if parsed.is_none() {
         return Ok(vec![]);
     }
     let parsed = parsed.unwrap();
 
-        let fts_query = build_fts_query(&parsed.text_tokens);
+    let fts_query = build_fts_query(&parsed.text_tokens);
 
-        if fts_query.is_empty() && parsed.slash_pairs.is_empty() {
-            return Ok(vec![]);
-        }
+    if fts_query.is_empty() && parsed.slash_pairs.is_empty() {
+        return Ok(vec![]);
+    }
 
-        let has_praha = parsed.text_tokens.iter().any(|t| t == "praha");
-        let num_vec: Vec<i32> = parsed.number_candidates.clone();
-        let psc_vec: Vec<i32> = parsed.psc_exact_candidates.clone();
-        let psc_parts = parsed.psc_parts;
-        let slash_pairs = parsed.slash_pairs;
+    let has_praha = parsed.text_tokens.iter().any(|t| t == "praha");
+    let num_vec: Vec<i32> = parsed.number_candidates.clone();
+    let psc_vec: Vec<i32> = parsed.psc_exact_candidates.clone();
+    let psc_parts = parsed.psc_parts;
+    let slash_pairs = parsed.slash_pairs;
 
-        // 1. Vygenerujeme list validních GeneratedCase!
-        let cases = generate_assignments(&num_vec, &psc_vec, has_praha, &psc_parts, &slash_pairs);
+    let cases = generate_assignments(&num_vec, &psc_vec, has_praha, &psc_parts, &slash_pairs);
 
-        // TODO: Zde implementuj finální smyčku, která nahradí pevné větve dynamickými.
-        // Volání build_priority_branches je pryč.
-        let mut branches = vec![];
-        let mut binds = vec![];
+    let mut branches = vec![];
+    let mut binds = vec![];
 
-        for case in cases {
-            push_branch(
-                &mut branches,
-                &mut binds,
-                case.score,
-                &case.where_sql,
-                &fts_query,
-                case.binds,
-            );
-        }
+    for case in cases {
+        push_branch(
+            &mut branches,
+            &mut binds,
+            case.score,
+            &case.where_sql,
+            &fts_query,
+            case.binds,
+        );
+    }
 
-        if num_vec.is_empty() && psc_vec.is_empty() && slash_pairs.is_empty() {
-            push_branch(&mut branches, &mut binds, 100, "1=1", &fts_query, vec![]);
-        }
+    if num_vec.is_empty() && psc_vec.is_empty() && slash_pairs.is_empty() {
+        push_branch(&mut branches, &mut binds, 100, "1=1", &fts_query, vec![]);
+    }
 
-        if branches.is_empty() {
-            return Ok(vec![]);
-        }
+    if branches.is_empty() {
+        return Ok(vec![]);
+    }
 
-        let final_sql = build_final_sql(&mut branches);
+    let final_sql = build_final_sql(&mut branches);
 
-        let mut q = sqlx::query_as::<_, Adresa>(&final_sql);
-        for bind in &binds {
-            q = q.bind(bind);
-        }
+    let mut q = sqlx::query_as::<_, Adresa>(&final_sql);
+    for bind in &binds {
+        q = q.bind(bind);
+    }
 
     let results = q.fetch_all(pool).await?;
 

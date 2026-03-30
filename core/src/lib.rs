@@ -83,23 +83,12 @@ pub fn pad_token(token: &str) -> String {
     }
 
     match t.len() {
-        1 => {
-            if t.chars().next().unwrap().is_numeric() {
-                format!("{}xx", t)
-            } else {
-                t.to_string()
-            }
-        }
-        2 => {
-            if t.chars().all(|c| c.is_numeric()) {
-                format!("{}x", t)
-            } else {
-                t.to_string()
-            }
-        }
+        1 => format!("{}xx", t),
+        2 => format!("{}x", t),
         _ => t.to_string(),
     }
 }
+
 
 #[cfg(test)]
 mod tests {
@@ -110,9 +99,9 @@ mod tests {
         assert_eq!(pad_token("1"), "1xx");
         assert_eq!(pad_token("17"), "17x");
         assert_eq!(pad_token("123"), "123");
+        assert_eq!(pad_token("1a"), "1ax");
         assert_eq!(pad_token("praha"), "praha");
-        assert_eq!(pad_token("a"), "a");
-        assert_eq!(pad_token("ab"), "ab");
+        assert_eq!(pad_token("a"), "axx");
         assert_eq!(pad_token(""), "");
     }
 }
