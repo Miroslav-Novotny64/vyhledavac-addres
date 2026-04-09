@@ -180,4 +180,19 @@ mod tests {
         assert_contains_address(&results, "10a");
         assert_contains_address(&results, "Havířov");
     }
+
+    #[tokio::test]
+    async fn test_short_city() {
+        let pool = get_test_pool().await;
+        let results = search_adresa_impl(&pool, "Okružní 32 Aš".to_string()).await.unwrap();
+        assert_contains_address(&results, "Okružní");
+        assert_contains_address(&results, "Aš");
+    }
+    #[tokio::test]
+    async fn test_mirova_1_ri_mandatory() {
+        let pool = get_test_pool().await;
+        let results = search_adresa_impl(&pool, "mirova 1 ri".to_string()).await.unwrap();
+        assert_contains_address(&results, "říčany");
+        assert_contains_address(&results, "1");
+    }
 }

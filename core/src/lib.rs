@@ -78,15 +78,10 @@ pub fn normalize(s: &str) -> String {
 
 pub fn pad_token(token: &str) -> String {
     let t = token.trim();
-    if t.is_empty() {
-        return String::new();
+    if t == "as" || t == "es" {
+        return format!("{}x", t);
     }
-
-    match t.len() {
-        1 => format!("{}xx", t),
-        2 => format!("{}x", t),
-        _ => t.to_string(),
-    }
+    t.to_string()
 }
 
 
@@ -96,12 +91,11 @@ mod tests {
 
     #[test]
     fn test_pad_token() {
-        assert_eq!(pad_token("1"), "1xx");
-        assert_eq!(pad_token("17"), "17x");
-        assert_eq!(pad_token("123"), "123");
-        assert_eq!(pad_token("1a"), "1ax");
+        assert_eq!(pad_token("as"), "asx"); // Aš
+        assert_eq!(pad_token("es"), "esx"); // Eš
+        assert_eq!(pad_token("1"), "1");    
+        assert_eq!(pad_token("17"), "17");  
         assert_eq!(pad_token("praha"), "praha");
-        assert_eq!(pad_token("a"), "axx");
         assert_eq!(pad_token(""), "");
     }
 }

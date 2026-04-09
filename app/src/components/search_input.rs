@@ -109,15 +109,8 @@ fn parse_input(raw_input: &str) -> Option<ParserResult> {
 fn build_fts_query(text_tokens: &[String]) -> String {
     let mut parts = vec![];
     for t in text_tokens {
-        let is_address_variant = t.chars().next().map_or(false, |c| c.is_ascii_digit()) 
-                              && t.chars().last().map_or(false, |c| c.is_alphabetic());
-        
-        if is_address_variant {
-            let padded = pad_token(t);
-            parts.push(format!("+{}*", padded));
-        } else {
-            parts.push(format!("+{}*", t));
-        }
+        let padded = pad_token(t);
+        parts.push(format!("+{}*", padded));
     }
     parts.join(" ")
 }

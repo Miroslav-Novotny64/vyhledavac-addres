@@ -125,7 +125,7 @@ fn append_normalized_tokens(search: &mut StdString, seen: &mut HashSet<StdString
     if let Some(v) = value {
         let normalized = normalize(v);
         for token in normalized.as_str().split_whitespace() {
-            append_unique_token(search, seen, token.to_string());
+            append_unique_token(search, seen, pad_token(token));
         }
     }
 }
