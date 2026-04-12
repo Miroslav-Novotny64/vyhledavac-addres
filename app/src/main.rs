@@ -52,7 +52,12 @@ async fn main() -> std::io::Result<()> {
                 }
             })
             // handle server functions
-            .route("/api/{tail:.*}", leptos_actix::handle_server_fns())
+            .route("/api/{tail:.*}", {
+                let pool = pool.clone();
+                leptos_actix::handle_server_fns_with_context(move || {
+                    provide_context(pool.clone());
+                })
+            })
             .app_data(web::Data::new(leptos_options.to_owned()))
             .app_data(web::Data::new(pool.clone()))
         //.wrap(middleware::Compress::default())

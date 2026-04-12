@@ -133,10 +133,8 @@ pub fn SearchInput(
 
 #[server]
 pub async fn search_adresa(input: String) -> Result<Vec<Adresa>, ServerFnError> {
-    use core_db::create_pool;
-    let pool = create_pool()
-        .await
-        .map_err(|e| ServerFnError::new(format!("Pool error: {}", e)))?;
+    let pool = use_context::<sqlx::MySqlPool>()
+        .ok_or_else(|| ServerFnError::new("Database pool not found in context"))?;
     search_adresa_impl(&pool, input)
         .await
         .map_err(|e| ServerFnError::new(format!("Query error: {}", e)))
