@@ -176,10 +176,14 @@ pub async fn search_adresa_impl(
         .collect::<Vec<String>>()
         .join(" ");
 
-    let mut query_builder =
-        sqlx::QueryBuilder::new("SELECT * FROM adresa WHERE MATCH(search) AGAINST(");
+    let mut query_builder = sqlx::QueryBuilder::new(
+        "SELECT * FROM (\
+            SELECT * FROM adresa \
+            WHERE MATCH(search) AGAINST("
+    );
     query_builder.push_bind(&fts_query);
-    query_builder.push(" IN BOOLEAN MODE) ");
+    query_builder.push(" IN BOOLEAN MODE) LIMIT 100\
+        ) AS c ");
 
     if !num_tokens.is_empty() {
         query_builder.push("ORDER BY (");
@@ -187,7 +191,7 @@ pub async fn search_adresa_impl(
             if i > 0 {
                 query_builder.push(" OR ");
             }
-            query_builder.push("cislo_domovni = ");
+            query_builder.push("c.cislo_domovni = ");
             query_builder.push_bind(num);
         }
         query_builder.push(") DESC, (");
@@ -195,15 +199,7 @@ pub async fn search_adresa_impl(
             if i > 0 {
                 query_builder.push(" OR ");
             }
-            query_builder.push("cislo_orientacni = ");
-            query_builder.push_bind(num);
-        }
-        query_builder.push(") DESC, (");
-        for (i, &num) in num_tokens.iter().enumerate() {
-            if i > 0 {
-                query_builder.push(" OR ");
-            }
-            query_builder.push("psc = ");
+            query_builder.push("c.cislo_orientacni = ");
             query_builder.push_bind(num);
         }
         query_builder.push(") DESC ");
