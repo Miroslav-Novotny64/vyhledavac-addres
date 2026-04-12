@@ -54,7 +54,7 @@ pub fn normalize(s: &str) -> String {
             'ú' | 'ů' | 'ü' | 'Ú' | 'Ů' | 'Ü' => Some('u'),
             'ý' | 'Ý' => Some('y'),
             'ž' | 'Ž' => Some('z'),
-            '/' => Some('_'),
+            '/' | '_' => Some('_'),
             _ if c.is_alphanumeric() => Some(c.to_ascii_lowercase()),
             _ => None,
         };
@@ -78,10 +78,19 @@ pub fn normalize(s: &str) -> String {
 
 pub fn pad_token(token: &str) -> String {
     let t = token.trim();
-    if t == "as" || t == "es" {
-        return format!("{}x", t);
+
+    if t.is_empty() {
+        return String::new();
     }
-    t.to_string()
+
+    if t == "as" || t == "es" {
+        return format!("xxx{}", t);
+    }
+    if t.chars().next().unwrap().is_numeric() {
+        return format!("xxx{}", t);
+    } else {
+        return t.to_string();
+    }
 }
 
 
@@ -91,10 +100,10 @@ mod tests {
 
     #[test]
     fn test_pad_token() {
-        assert_eq!(pad_token("as"), "asx"); // Aš
-        assert_eq!(pad_token("es"), "esx"); // Eš
-        assert_eq!(pad_token("1"), "1");    
-        assert_eq!(pad_token("17"), "17");  
+        assert_eq!(pad_token("as"), "xxxas"); // Aš
+        assert_eq!(pad_token("es"), "xxxes"); // Eš
+        assert_eq!(pad_token("1"), "xxx1");    
+        assert_eq!(pad_token("17"), "xxx17");  
         assert_eq!(pad_token("praha"), "praha");
         assert_eq!(pad_token(""), "");
     }

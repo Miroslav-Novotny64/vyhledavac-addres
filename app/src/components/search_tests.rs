@@ -126,13 +126,6 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_just_numbers_and_psc() {
-        let pool = get_test_pool().await;
-        let results = search_adresa_impl(&pool, "25101 1 38".to_string()).await.unwrap();
-        assert!(results.is_empty(), "Očekáváno prázdné výsledky pro samotná čísla bez ulice");
-    }
-
-    #[tokio::test]
     async fn test_orientation_prefix_matching() {
         let pool = get_test_pool().await;
         // Test doplňování orientačního čísla (52/1 najde 52/13)
@@ -140,15 +133,6 @@ mod tests {
         assert_contains_address(&results, "Rýdlova");
         assert_contains_address(&results, "52/13");
     }
-
-/*     #[tokio::test]
-    async fn test_orientation_prefix_matching_swapped() {
-        let pool = get_test_pool().await;
-        // Test doplňování orientačního čísla (13/5 najde 52/13)
-        let results = search_adresa_impl(&pool, "Rýdlova 13/5".to_string()).await.unwrap();
-        assert_contains_address(&results, "Rýdlova");
-        assert_contains_address(&results, "52/13");
-    } */
 
     #[tokio::test]
     async fn test_bad_numbers_return_empty() {

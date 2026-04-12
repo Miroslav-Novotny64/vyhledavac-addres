@@ -1,481 +1,10 @@
+use core_db::Adresa;
 #[cfg(feature = "ssr")]
 use core_db::{normalize, pad_token};
-use core_db::Adresa;
 use leptos::prelude::*;
 use leptos::task::spawn_local;
 #[cfg(feature = "ssr")]
-use std::collections::HashSet;
-
-#[cfg(feature = "ssr")]
-struct ParserResult {
-    text_tokens: Vec<String>,
-    number_candidates: Vec<i32>,
-    psc_exact_candidates: Vec<i32>,
-    psc_parts: Vec<(i32, i32)>,
-    slash_pairs: Vec<String>,
-}
-
-#[cfg(feature = "ssr")]
-#[derive(Clone, Default, Eq, PartialEq, Hash)]
-struct Assignment {
-    ulice: Option<i32>,
-    dom: Option<i32>,
-    ori: Option<i32>,
-    psc: Option<i32>,
-    psc_is_exact: bool,
-    obvod: Option<i32>,
-}
-
-#[cfg(feature = "ssr")]
-struct GeneratedCase {
-    where_sql: String,
-    binds: Vec<String>,
-    score: i32,
-}
-
-#[cfg(feature = "ssr")]
-fn parse_input(raw_input: &str) -> Option<ParserResult> {
-    let normalized = normalize(raw_input);
-    let tokens: Vec<&str> = normalized.split_whitespace().collect();
-    if tokens.is_empty() {
-        return None;
-    }
-
-    let mut text_tokens = vec![];
-    let mut num_tokens = vec![];
-    let mut slash_pairs = vec![];
-
-    for &token in &tokens {
-        if token.chars().all(|c| c.is_ascii_digit()) {
-            num_tokens.push(token);
-        } else if token.contains('_') {
-            let parts: Vec<&str> = token.split('_').collect();
-            if parts.len() == 2
-                && parts[0].chars().all(|c| c.is_ascii_digit())
-                && parts[1].chars().all(|c| c.is_ascii_digit())
-            {
-                slash_pairs.push(token.to_string());
-            } else {
-                text_tokens.push(token.to_string());
-            }
-        } else {
-            text_tokens.push(token.to_string());
-        }
-    }
-
-    // FTS je povinný jen pokud nemáme jiný silný selektor
-    if text_tokens.is_empty() && slash_pairs.is_empty() {
-        return None;
-    }
-
-    let mut number_candidates = Vec::new();
-    let mut psc_exact_candidates = Vec::new();
-    let mut psc_parts = Vec::new();
-
-    for n in num_tokens {
-        if let Ok(value) = n.parse::<i32>() {
-            match n.len() {
-                1..=4 => {
-                    number_candidates.push(value);
-                }
-                5 => {
-                    psc_exact_candidates.push(value);
-                }
-                _ => {}
-            }
-        }
-    }
-
-    // PSC z dvojice 3+2 tokenů, např. "251 01"
-    for window in tokens.windows(2) {
-        if window[0].len() == 3 && window[1].len() == 2 {
-            if let (Ok(a), Ok(b)) = (window[0].parse::<i32>(), window[1].parse::<i32>()) {
-                psc_exact_candidates.push(a * 100 + b);
-                psc_parts.push((a, b));
-            }
-        }
-    }
-
-    Some(ParserResult {
-        text_tokens,
-        number_candidates,
-        psc_exact_candidates,
-        psc_parts,
-        slash_pairs,
-    })
-}
-
-#[cfg(feature = "ssr")]
-fn build_fts_query(text_tokens: &[String]) -> String {
-    let mut parts = vec![];
-    for t in text_tokens {
-        let padded = pad_token(t);
-        parts.push(format!("+{}*", padded));
-    }
-    parts.join(" ")
-}
-
-
-
-#[cfg(feature = "ssr")]
-fn push_branch(
-    branches: &mut Vec<String>,
-    binds: &mut Vec<String>,
-    priority: i32,
-    where_filter: &str,
-    fts_query: &str,
-    extra_binds: Vec<String>,
-) {
-    let match_clause = if fts_query.trim().is_empty() {
-        "1=1".to_string()
-    } else {
-        "MATCH(a.search) AGAINST(? IN BOOLEAN MODE)".to_string()
-    };
-
-    let sql = format!(
-        "SELECT
-        a.kod_adm, a.kod_obce, a.nazev_obce, a.kod_momc, a.nazev_momc,
-        a.kod_obvodu_prahy, a.nazev_obvodu_prahy, a.kod_casti_obce, a.nazev_casti_obce,
-        a.kod_ulice, a.nazev_ulice, a.typ_so, a.cislo_domovni, a.cislo_orientacni,
-        a.znak_cisla_orientacniho, a.psc, a.souradnice_y, a.souradnice_x, a.plati_od,
-        a.search,
-        ? AS priority
-      FROM adresa a
-      WHERE {}
-        AND ({})
-      LIMIT 20",
-        match_clause, where_filter
-    );
-
-    branches.push(sql);
-    binds.push(priority.to_string());
-    if !fts_query.trim().is_empty() {
-        binds.push(fts_query.to_string());
-    }
-    binds.extend(extra_binds);
-}
-
-#[cfg(feature = "ssr")]
-fn build_final_sql(branches: &mut Vec<String>) -> String {
-    let union_sql = branches
-        .iter()
-        .map(|b| format!("({})", b))
-        .collect::<Vec<_>>()
-        .join(" UNION ALL ");
-    let final_sql = format!(
-        "
-      SELECT
-        kod_adm, kod_obce, nazev_obce, kod_momc, nazev_momc,
-        kod_obvodu_prahy, nazev_obvodu_prahy, kod_casti_obce, nazev_casti_obce,
-        kod_ulice, nazev_ulice, typ_so, cislo_domovni, cislo_orientacni,
-        znak_cisla_orientacniho, psc, souradnice_y, souradnice_x, plati_od, search
-      FROM (
-        SELECT
-          ranked.*,
-          ROW_NUMBER() OVER (
-            PARTITION BY ranked.kod_adm
-            ORDER BY ranked.priority DESC
-          ) AS rn
-        FROM (
-          {union_sql}
-        ) ranked
-      ) dedup
-      WHERE dedup.rn = 1
-      ORDER BY dedup.priority DESC
-      LIMIT 20
-    "
-    );
-    return final_sql;
-}
-
-#[cfg(feature = "ssr")]
-fn backtrack(
-    nums: &[i32],                      // Zbytek 1-4ciferných čísel
-    pscs: &[i32],                      // Zbytek 5ciferných PSČ
-    current: &mut Assignment,          // co jsme už použili
-    has_praha: bool,                   // Jestli je v textu "praha"
-    results: &mut HashSet<Assignment>, // Set se všemi úspěšnými results
-    psc_parts: &[(i32, i32)],
-) {
-    if let Some(&p) = pscs.first() {
-        let a_part = p / 100;
-        let b_part = p % 100;
-        let is_split_psc = psc_parts.contains(&(a_part, b_part));
-
-        if current.psc.is_none() {
-            current.psc = Some(p);
-            current.psc_is_exact = true;
-
-            let mut sub_nums = Vec::new();
-
-            if is_split_psc {
-                let mut a_removed = false;
-                let mut b_removed = false;
-                for &n in nums {
-                    if !a_removed && n == a_part {
-                        a_removed = true;
-                    } else if !b_removed && n == b_part {
-                        b_removed = true;
-                    } else {
-                        sub_nums.push(n);
-                    }
-                }
-            } else {
-                sub_nums = nums.to_vec();
-            }
-
-            backtrack(
-                &sub_nums,
-                &pscs[1..],
-                current,
-                has_praha,
-                results,
-                psc_parts,
-            );
-
-            current.psc = None;
-            current.psc_is_exact = false;
-        }
-
-        if is_split_psc {
-            backtrack(nums, &pscs[1..], current, has_praha, results, psc_parts);
-        }
-
-        return;
-    }
-
-    if let Some(&n) = nums.first() {
-        let zbytek_cisel = &nums[1..];
-
-        if current.ulice.is_none() {
-            current.ulice = Some(n);
-            backtrack(zbytek_cisel, pscs, current, has_praha, results, psc_parts);
-            current.ulice = None;
-        }
-        if current.dom.is_none() {
-            current.dom = Some(n);
-            backtrack(zbytek_cisel, pscs, current, has_praha, results, psc_parts);
-            current.dom = None;
-        }
-        if current.ori.is_none() {
-            current.ori = Some(n);
-            backtrack(zbytek_cisel, pscs, current, has_praha, results, psc_parts);
-            current.ori = None;
-        }
-        if current.psc.is_none() {
-            current.psc = Some(n);
-            current.psc_is_exact = false;
-            backtrack(zbytek_cisel, pscs, current, has_praha, results, psc_parts);
-            current.psc = None;
-        }
-        if current.obvod.is_none() && has_praha && n >= 1 && n <= 22 {
-            current.obvod = Some(n);
-            backtrack(zbytek_cisel, pscs, current, has_praha, results, psc_parts);
-            current.obvod = None;
-        }
-
-        return;
-    }
-    let mut c = current.clone();
-
-    if c.dom.is_none() && c.ori.is_some() {
-        c.dom = c.ori;
-        c.ori = None;
-    }
-
-    results.insert(c);
-}
-
-#[cfg(feature = "ssr")]
-fn generate_assignments(
-    nums: &[i32],
-    pscs: &[i32],
-    has_praha: bool,
-    psc_parts: &[(i32, i32)],
-    slash_pairs: &[String],
-) -> Vec<GeneratedCase> {
-    let mut results = HashSet::new();
-    let mut initial = Assignment::default();
-
-    backtrack(nums, pscs, &mut initial, has_praha, &mut results, psc_parts);
-
-    let mut cases = Vec::new();
-    for addr in results {
-        let mut conds = vec![];
-        let mut binds = vec![];
-        let mut score = 0;
-
-        if let Some(u) = addr.ulice {
-            conds.push("a.ulice_cislo = ?".to_string());
-            binds.push(u.to_string());
-            score += 300;
-        }
-        match (addr.dom, addr.ori) {
-            (Some(d), Some(o)) => {
-                conds.push("a.cislo_domovni = ?".to_string());
-                binds.push(d.to_string());
-                conds.push("a.cislo_orientacni = ?".to_string());
-                binds.push(o.to_string());
-                score += 900;
-            }
-            (Some(d), None) => {
-                conds.push("(a.cislo_domovni = ? OR a.cislo_orientacni = ?)".to_string());
-                binds.push(d.to_string());
-                binds.push(d.to_string());
-                score += 400;
-            }
-            _ => {}
-        }
-
-        if let Some(p) = addr.psc {
-            if addr.psc_is_exact {
-                conds.push("a.psc = ?".to_string());
-                binds.push(p.to_string());
-            } else {
-                let s = p.to_string();
-                let missing = 5 - s.len();
-                conds.push("a.psc BETWEEN ? AND ?".to_string());
-                binds.push(format!("{}{}", s, "0".repeat(missing)));
-                binds.push(format!("{}{}", s, "9".repeat(missing)));
-            }
-            score += 200;
-        }
-
-        if let Some(ob) = addr.obvod {
-            conds.push("a.obvod_prahy_cislo = ?".to_string());
-            binds.push(ob.to_string());
-            score += 250;
-        }
-
-        for sp in slash_pairs {
-            if let Some((first, second)) = sp.split_once('_') {
-                let first_val = first.parse::<i32>().unwrap_or(0);
-                let second_val = second;
-
-                let mut ori_clauses = vec!["a.cislo_orientacni = ?".to_string()];
-                let mut ori_binds = vec![second_val.to_string()];
-                for digits in 1..=3 {
-                    if second_val.len() + digits <= 4 {
-                        let lower = format!("{}{}", second_val, "0".repeat(digits));
-                        let upper = format!("{}{}", second_val, "9".repeat(digits));
-                        ori_clauses.push("a.cislo_orientacni BETWEEN ? AND ?".to_string());
-                        ori_binds.push(lower);
-                        ori_binds.push(upper);
-                    }
-                }
-                let ori_cond = format!("({})", ori_clauses.join(" OR "));
-                let mut case1_binds = vec![first_val.to_string()];
-                case1_binds.extend(ori_binds);
-
-                let mut house_clauses = vec!["a.cislo_domovni = ?".to_string()];
-                let mut house_binds = vec![second_val.to_string()];
-                for digits in 1..=3 {
-                     if second_val.len() + digits <= 4 {
-                         let lower = format!("{}{}", second_val, "0".repeat(digits));
-                         let upper = format!("{}{}", second_val, "9".repeat(digits));
-                         house_clauses.push("a.cislo_domovni BETWEEN ? AND ?".to_string());
-                         house_binds.push(lower);
-                         house_binds.push(upper);
-                     }
-                }
-                let house_cond = format!("({})", house_clauses.join(" OR "));
-                let mut case2_binds = house_binds;
-                case2_binds.push(first.to_string());
-
-                conds.push(format!("((a.cislo_domovni = ? AND {}) OR ({} AND a.cislo_orientacni = ?))", ori_cond, house_cond));
-                binds.extend(case1_binds);
-                binds.extend(case2_binds);
-                score += 900;
-            }
-        }
-
-        if !conds.is_empty() {
-            cases.push(GeneratedCase {
-                where_sql: conds.join(" AND "),
-                binds,
-                score,
-            });
-        }
-    }
-    cases
-}
-
-#[server]
-pub async fn search_adresa(v: String) -> Result<Vec<Adresa>, ServerFnError> {
-    #[cfg(feature = "ssr")]
-    {
-        use actix_web::web::Data;
-        use leptos_actix::extract;
-        use sqlx::mysql::MySqlPool;
-
-        let pool = extract::<Data<MySqlPool>>().await?.into_inner().clone();
-        search_adresa_impl(&pool, v).await
-    }
-    #[cfg(not(feature = "ssr"))]
-    {
-        let _ = v;
-        Err(ServerFnError::new("Server-side only"))
-    }
-}
-
-#[cfg(feature = "ssr")]
-pub async fn search_adresa_impl(
-    pool: &sqlx::MySqlPool,
-    v: String,
-) -> Result<Vec<Adresa>, ServerFnError> {
-    let parsed = parse_input(&v);
-    if parsed.is_none() {
-        return Ok(vec![]);
-    }
-    let parsed = parsed.unwrap();
-
-    let fts_query = build_fts_query(&parsed.text_tokens);
-
-    if fts_query.is_empty() && parsed.slash_pairs.is_empty() {
-        return Ok(vec![]);
-    }
-
-    let has_praha = parsed.text_tokens.iter().any(|t| t == "praha");
-    let num_vec: Vec<i32> = parsed.number_candidates.clone();
-    let psc_vec: Vec<i32> = parsed.psc_exact_candidates.clone();
-    let psc_parts = parsed.psc_parts;
-    let slash_pairs = parsed.slash_pairs;
-
-    let cases = generate_assignments(&num_vec, &psc_vec, has_praha, &psc_parts, &slash_pairs);
-
-    let mut branches = vec![];
-    let mut binds = vec![];
-
-    for case in cases {
-        push_branch(
-            &mut branches,
-            &mut binds,
-            case.score,
-            &case.where_sql,
-            &fts_query,
-            case.binds,
-        );
-    }
-
-    if num_vec.is_empty() && psc_vec.is_empty() && slash_pairs.is_empty() {
-        push_branch(&mut branches, &mut binds, 100, "1=1", &fts_query, vec![]);
-    }
-
-    if branches.is_empty() {
-        return Ok(vec![]);
-    }
-
-    let final_sql = build_final_sql(&mut branches);
-
-    let mut q = sqlx::query_as::<_, Adresa>(&final_sql);
-    for bind in &binds {
-        q = q.bind(bind);
-    }
-
-    let results = q.fetch_all(pool).await?;
-
-    Ok(results)
-}
+use sqlx;
 
 #[component]
 pub fn SearchInput(
@@ -494,9 +23,9 @@ pub fn SearchInput(
                     placeholder=placeholder
                     prop:value=value
                     on:input=move |ev| {
-                        let v = event_target_value(&ev);
-                        value.set(v.clone());
-                        if v.len() < 3 {
+                        let input = event_target_value(&ev);
+                        value.set(input.clone());
+                        if input.len() < 3 {
                             results.set(Vec::new());
                             return;
                         }
@@ -507,7 +36,7 @@ pub fn SearchInput(
                         set_timeout(move || {
                             if last_request_id.get_untracked() == request_id {
                                 spawn_local(async move {
-                                    if let Ok(res) = search_adresa(v).await {
+                                    if let Ok(res) = search_adresa(input).await {
                                         if last_request_id.get_untracked() == request_id {
                                             results.set(res);
                                         }
@@ -600,4 +129,90 @@ pub fn SearchInput(
             </Show>
         </div>
     }
+}
+
+#[server]
+pub async fn search_adresa(input: String) -> Result<Vec<Adresa>, ServerFnError> {
+    use core_db::create_pool;
+    let pool = create_pool()
+        .await
+        .map_err(|e| ServerFnError::new(format!("Pool error: {}", e)))?;
+    search_adresa_impl(&pool, input)
+        .await
+        .map_err(|e| ServerFnError::new(format!("Query error: {}", e)))
+}
+
+#[cfg(feature = "ssr")]
+pub async fn search_adresa_impl(
+    pool: &sqlx::MySqlPool,
+    input: String,
+) -> Result<Vec<Adresa>, sqlx::Error> {
+    let tokens: Vec<&str> = input.split_whitespace().collect();
+    if tokens.is_empty() {
+        return Ok(Vec::new());
+    }
+
+    let mut norm_tokens = Vec::new();
+    let mut num_tokens = Vec::new();
+
+    for t in tokens {
+        let norm = normalize(t);
+        if norm.is_empty() {
+            continue;
+        }
+
+        if let Ok(num) = norm.parse::<i32>() {
+            num_tokens.push(num);
+        }
+        norm_tokens.push(norm);
+    }
+
+    if norm_tokens.is_empty() {
+        return Ok(Vec::new());
+    }
+
+    let padded_tokens: Vec<String> = norm_tokens.iter().map(|t| pad_token(t)).collect();
+    let fts_query = padded_tokens
+        .iter()
+        .map(|t| format!("+{}*", t))
+        .collect::<Vec<String>>()
+        .join(" ");
+
+    let mut query_builder =
+        sqlx::QueryBuilder::new("SELECT * FROM adresa WHERE MATCH(search) AGAINST(");
+    query_builder.push_bind(&fts_query);
+    query_builder.push(" IN BOOLEAN MODE) ");
+
+    if !num_tokens.is_empty() {
+        query_builder.push("ORDER BY (");
+        for (i, &num) in num_tokens.iter().enumerate() {
+            if i > 0 {
+                query_builder.push(" OR ");
+            }
+            query_builder.push("cislo_domovni = ");
+            query_builder.push_bind(num);
+        }
+        query_builder.push(") DESC, (");
+        for (i, &num) in num_tokens.iter().enumerate() {
+            if i > 0 {
+                query_builder.push(" OR ");
+            }
+            query_builder.push("cislo_orientacni = ");
+            query_builder.push_bind(num);
+        }
+        query_builder.push(") DESC, (");
+        for (i, &num) in num_tokens.iter().enumerate() {
+            if i > 0 {
+                query_builder.push(" OR ");
+            }
+            query_builder.push("psc = ");
+            query_builder.push_bind(num);
+        }
+        query_builder.push(") DESC ");
+    }
+
+    query_builder.push("LIMIT 20");
+
+    let query = query_builder.build_query_as::<Adresa>();
+    query.fetch_all(pool).await
 }

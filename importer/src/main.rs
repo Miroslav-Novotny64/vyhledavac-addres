@@ -1,14 +1,12 @@
 use std::fs;
-use std::collections::HashSet;
 use std::string::String as StdString;
-use anyhow::{Context, Result};
-use sqlx::MySqlPool;
-use core_db::{create_pool, Adresa, normalize, pad_token};
 
+use anyhow::{Context, Result};
+use core_db::{create_pool, normalize, pad_token, Adresa};
 use encoding_rs::WINDOWS_1250;
 use encoding_rs_io::DecodeReaderBytesBuilder;
 use serde::Deserialize;
-use sqlx::types::chrono::NaiveDateTime;
+use sqlx::{MySqlPool, types::chrono::NaiveDateTime};
 
 #[derive(Debug, Deserialize)]
 struct CsvAdresa {
@@ -43,91 +41,13 @@ struct CsvAdresa {
     #[serde(rename = "Znak čísla orientačního")]
     znak_cisla_orientacniho: Option<String>,
     #[serde(rename = "PSČ")]
-    psc: String,
+    psc: i32,
     #[serde(rename = "Souřadnice Y")]
     souradnice_y: Option<f64>,
     #[serde(rename = "Souřadnice X")]
     souradnice_x: Option<f64>,
     #[serde(rename = "Platí Od")]
-    plati_od: String,
-}
-
-fn parse_psc(raw: &str) -> i32 {
-    let digits: StdString = raw.chars().filter(|c| c.is_ascii_digit()).collect();
-    if digits.len() == 5 {
-        digits.as_str().parse::<i32>().unwrap_or(0)
-    } else {
-        0
-    }
-}
-
-fn extract_first_number(value: &str) -> Option<i32> {
-    normalize(value)
-        .as_str()
-        .split_whitespace()
-        .find_map(|token| {
-            if token.chars().all(|c| c.is_ascii_digit()) {
-                token.parse::<i32>().ok()
-            } else {
-                None
-            }
-        })
-}
-
-fn extract_praha_obvod_number(
-    nazev_obvodu_prahy: Option<&str>,
-    nazev_momc: Option<&str>,
-    kod_obvodu_prahy: Option<i32>,
-) -> Option<i32> {
-    if let Some(name) = nazev_obvodu_prahy {
-        if let Some(n) = extract_first_number(name) {
-            return Some(n);
-        }
-    }
-
-    if let Some(name) = nazev_momc {
-        if let Some(n) = extract_first_number(name) {
-            return Some(n);
-        }
-    }
-
-    kod_obvodu_prahy.filter(|v| (1..=22).contains(v))
-}
-
-fn domovni_orientacni_key(domovni: i32, orientacni: Option<i32>, znak: Option<&str>) -> Option<String> {
-    orientacni.map(|o| {
-        let znak = znak.unwrap_or("").trim().to_ascii_lowercase();
-        if znak.is_empty() {
-            format!("{domovni}_{o}")
-        } else {
-            format!("{domovni}_{o}{znak}")
-        }
-    })
-}
-
-fn append_unique_token(search: &mut StdString, seen: &mut HashSet<StdString>, token: StdString) {
-    if token.is_empty() {
-        return;
-    }
-
-    if seen.contains(token.as_str()) {
-        return;
-    }
-
-    if !search.is_empty() {
-        search.push(' ');
-    }
-    search.push_str(token.as_str());
-    seen.insert(token);
-}
-
-fn append_normalized_tokens(search: &mut StdString, seen: &mut HashSet<StdString>, value: Option<&str>) {
-    if let Some(v) = value {
-        let normalized = normalize(v);
-        for token in normalized.as_str().split_whitespace() {
-            append_unique_token(search, seen, pad_token(token));
-        }
-    }
+    plati_od: NaiveDateTime,
 }
 
 #[tokio::main]
@@ -139,10 +59,8 @@ async fn main() -> Result<()> {
     sqlx::query(include_str!("../../core/schema.sql")).execute(&pool).await?;
 
     import(&pool).await?;
-
     Ok(())
 }
-
 
 async fn import(pool: &MySqlPool) -> Result<()> {
     let paths = fs::read_dir("./data/").context("Failed to read directory")?;
@@ -150,7 +68,7 @@ async fn import(pool: &MySqlPool) -> Result<()> {
     for path_result in paths {
         let entry = path_result.context("Failed to read directory entry")?;
         let path = entry.path();
-        
+
         if path.extension().and_then(|s| s.to_str()) != Some("csv") {
             continue;
         }
@@ -166,46 +84,82 @@ async fn import(pool: &MySqlPool) -> Result<()> {
             .delimiter(b';')
             .from_reader(transcoded);
 
-        let mut batch = Vec::with_capacity(1000);
+        let mut batch = Vec::with_capacity(20000);
 
         for result in rdr.deserialize() {
             let record: CsvAdresa = result.context("Failed to parse CSV record")?;
-            
-            let plati_od = NaiveDateTime::parse_from_str(&record.plati_od, "%Y-%m-%dT%H:%M:%S")
-                .context("Failed to parse date")?;
 
-            let psc = parse_psc(&record.psc);
-            let mut search = StdString::new();
-            let mut seen = HashSet::new();
+            let mut raw_terms: Vec<String> = Vec::new();
 
-            append_normalized_tokens(&mut search, &mut seen, record.nazev_ulice.as_deref());
-            append_normalized_tokens(&mut search, &mut seen, Some(&record.nazev_obce));
-            append_normalized_tokens(&mut search, &mut seen, record.nazev_casti_obce.as_deref());
-            append_normalized_tokens(&mut search, &mut seen, record.nazev_momc.as_deref());
-            append_normalized_tokens(&mut search, &mut seen, record.nazev_obvodu_prahy.as_deref());
+            if let Some(v) = record.nazev_ulice.as_deref() {
+                raw_terms.push(v.to_string());
+            }
+            raw_terms.push(record.nazev_obce.clone());
+            if let Some(v) = record.nazev_casti_obce.as_deref() {
+                raw_terms.push(v.to_string());
+            }
+            if let Some(v) = record.nazev_obvodu_prahy.as_deref() {
+                raw_terms.push(v.to_string());
+            }
+            if let Some(v) = record.nazev_momc.as_deref() {
+                raw_terms.push(v.to_string());
+            }
 
-            append_unique_token(&mut search, &mut seen, pad_token(&record.cislo_domovni.to_string()));
-            if let Some(orient) = record.cislo_orientacni {
-                append_unique_token(&mut search, &mut seen, pad_token(&orient.to_string()));
-                
-                let znak = record.znak_cisla_orientacniho.as_deref().unwrap_or("").trim();
+            let domovni = record.cislo_domovni.to_string();
+            raw_terms.push(domovni.clone());
+
+            if let Some(or) = record.cislo_orientacni {
+                let znak = record
+                    .znak_cisla_orientacniho
+                    .as_deref()
+                    .unwrap_or("")
+                    .trim()
+                    .to_ascii_lowercase();
+
+                let orientacni_znak = if znak.is_empty() {
+                    or.to_string()
+                } else {
+                    format!("{or}{znak}")
+                };
+
+                // orientacni+znak
+                raw_terms.push(orientacni_znak.clone());
+                // domovni_orientacni+znak
+                raw_terms.push(format!("{}/{}", domovni, orientacni_znak));
+                // orientacni+znak_domovni
+                raw_terms.push(format!("{}/{}", orientacni_znak, domovni));
+
                 if !znak.is_empty() {
-                    let orient_znak = format!("{}{}", orient, znak);
-                    append_unique_token(&mut search, &mut seen, pad_token(&orient_znak));
-                }
-
-                append_unique_token(&mut search, &mut seen, format!("{}_{}", record.cislo_domovni, orient));
-                append_unique_token(&mut search, &mut seen, format!("{}_{}", orient, record.cislo_domovni));
-
-                if !znak.is_empty() {
-                    append_unique_token(&mut search, &mut seen, format!("{}_{}{}", record.cislo_domovni, orient, znak));
+                    raw_terms.push(znak);
                 }
             }
 
-            if psc > 0 {
-                append_unique_token(&mut search, &mut seen, psc.to_string());
-                append_unique_token(&mut search, &mut seen, format!("{:03}", psc / 100));
-                append_unique_token(&mut search, &mut seen, format!("{:02}", psc % 100));
+            let psc_str = record.psc.to_string();
+            raw_terms.push(psc_str.clone());
+            if psc_str.len() == 5 {
+                raw_terms.push(psc_str[0..3].to_string());
+                raw_terms.push(psc_str[3..5].to_string());
+            }
+
+            let mut search = StdString::new();
+
+            for term in raw_terms {
+                for tok in term.split_whitespace() {
+                    let normalized = normalize(tok);
+                    if normalized.is_empty() {
+                        continue;
+                    }
+
+                    let padded = pad_token(normalized.as_str());
+                    if padded.is_empty() {
+                        continue;
+                    }
+
+                    if !search.is_empty() {
+                        search.push(' ');
+                    }
+                    search.push_str(padded.as_str());
+                }
             }
 
             batch.push(Adresa {
@@ -224,10 +178,10 @@ async fn import(pool: &MySqlPool) -> Result<()> {
                 cislo_domovni: record.cislo_domovni,
                 cislo_orientacni: record.cislo_orientacni,
                 znak_cisla_orientacniho: record.znak_cisla_orientacniho,
-                psc: psc,
+                psc: record.psc,
                 souradnice_y: record.souradnice_y,
                 souradnice_x: record.souradnice_x,
-                plati_od,
+                plati_od: record.plati_od,
                 search,
             });
 
@@ -252,24 +206,11 @@ pub async fn insert_batch(pool: &MySqlPool, batch: &[Adresa]) -> Result<()> {
             kod_obvodu_prahy, nazev_obvodu_prahy, kod_casti_obce, nazev_casti_obce,
             kod_ulice, nazev_ulice, typ_so, cislo_domovni, cislo_orientacni,
             znak_cisla_orientacniho, psc,
-            ulice_cislo, obvod_prahy_cislo, domovni_orientacni_klic,
             souradnice_y, souradnice_x, plati_od, search
-        ) "
+        ) ",
     );
 
     query_builder.push_values(batch, |mut b, adresa| {
-        let ulice_cislo = adresa.nazev_ulice.as_deref().and_then(extract_first_number);
-        let obvod_prahy_cislo = extract_praha_obvod_number(
-            adresa.nazev_obvodu_prahy.as_deref(),
-            adresa.nazev_momc.as_deref(),
-            adresa.kod_obvodu_prahy,
-        );
-        let domovni_orientacni_klic = domovni_orientacni_key(
-            adresa.cislo_domovni,
-            adresa.cislo_orientacni,
-            adresa.znak_cisla_orientacniho.as_deref(),
-        );
-
         b.push_bind(adresa.kod_adm)
             .push_bind(adresa.kod_obce)
             .push_bind(&adresa.nazev_obce)
@@ -285,18 +226,18 @@ pub async fn insert_batch(pool: &MySqlPool, batch: &[Adresa]) -> Result<()> {
             .push_bind(adresa.cislo_domovni)
             .push_bind(adresa.cislo_orientacni)
             .push_bind(&adresa.znak_cisla_orientacniho)
-            .push_bind(&adresa.psc)
-            .push_bind(ulice_cislo)
-            .push_bind(obvod_prahy_cislo)
-            .push_bind(domovni_orientacni_klic)
+            .push_bind(adresa.psc)
             .push_bind(adresa.souradnice_y)
             .push_bind(adresa.souradnice_x)
-            .push_bind(adresa.plati_od)
+            .push_bind(&adresa.plati_od)
             .push_bind(&adresa.search);
     });
 
     let query = query_builder.build();
-    query.execute(pool).await.context("Failed to insert batch of Adresa records")?;
+    query
+        .execute(pool)
+        .await
+        .context("Failed to insert batch of Adresa records")?;
 
     Ok(())
 }
