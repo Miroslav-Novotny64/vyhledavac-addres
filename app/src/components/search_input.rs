@@ -133,11 +133,28 @@ pub fn SearchInput(
 
 #[server]
 pub async fn search_adresa(input: String) -> Result<Vec<Adresa>, ServerFnError> {
-    let pool = use_context::<sqlx::MySqlPool>()
-        .ok_or_else(|| ServerFnError::new("Database pool not found in context"))?;
-    search_adresa_impl(&pool, input)
-        .await
-        .map_err(|e| ServerFnError::new(format!("Query error: {}", e)))
+    #[cfg(feature = "ssr")]
+    {
+        use actix_web::web::Data;
+        use leptos_actix::extract;
+        use sqlx::mysql::MySqlPool;
+
+        let pool = extract::<Data<MySqlPool>>()
+            .await
+            .map_err(|e| ServerFnError::new(format!("Failed to extract pool: {e}")))?
+            .into_inner()
+            .clone();
+
+        search_adresa_impl(&pool, input)
+            .await
+            .map_err(|e| ServerFnError::new(format!("Query error: {e}")))
+    }
+
+    #[cfg(not(feature = "ssr"))]
+    {
+        let _ = input;
+        Err(ServerFnError::new("Server-side only"))
+    }
 }
 
 #[cfg(feature = "ssr")]
@@ -177,21 +194,18 @@ pub async fn search_adresa_impl(
         .join(" ");
 
     let mut query_builder = sqlx::QueryBuilder::new(
-        "SELECT * FROM (\
-            SELECT * FROM adresa \
-            WHERE MATCH(search) AGAINST("
+        "SELECT * FROM adresa WHERE MATCH(search) AGAINST(",
     );
     query_builder.push_bind(&fts_query);
-    query_builder.push(" IN BOOLEAN MODE) LIMIT 100\
-        ) AS c ");
+    query_builder.push(" IN BOOLEAN MODE)");
 
     if !num_tokens.is_empty() {
-        query_builder.push("ORDER BY (");
+        query_builder.push(" ORDER BY (");
         for (i, &num) in num_tokens.iter().enumerate() {
             if i > 0 {
                 query_builder.push(" OR ");
             }
-            query_builder.push("c.cislo_domovni = ");
+            query_builder.push("cislo_domovni = ");
             query_builder.push_bind(num);
         }
         query_builder.push(") DESC, (");
@@ -199,13 +213,13 @@ pub async fn search_adresa_impl(
             if i > 0 {
                 query_builder.push(" OR ");
             }
-            query_builder.push("c.cislo_orientacni = ");
+            query_builder.push("cislo_orientacni = ");
             query_builder.push_bind(num);
         }
-        query_builder.push(") DESC ");
+        query_builder.push(") DESC");
     }
 
-    query_builder.push("LIMIT 20");
+    query_builder.push(" LIMIT 20");
 
     let query = query_builder.build_query_as::<Adresa>();
     query.fetch_all(pool).await

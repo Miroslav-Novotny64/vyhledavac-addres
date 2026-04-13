@@ -5,16 +5,13 @@ mod tests {
     use sqlx::mysql::MySqlPool;
     use std::env;
     use std::time::Instant;
-    use tokio::sync::OnceCell;
-
-    static SHARED_POOL: OnceCell<MySqlPool> = OnceCell::const_new();
 
     async fn get_test_pool() -> MySqlPool {
-        SHARED_POOL.get_or_init(|| async {
-            dotenvy::dotenv().ok();
-            let url = env::var("DATABASE_URL").expect("DATABASE_URL musí být nastavena pro testy");
-            MySqlPool::connect(&url).await.expect("Selhalo připojení k testovací databázi")
-        }).await.clone()
+        dotenvy::dotenv().ok();
+        let url = env::var("DATABASE_URL").expect("DATABASE_URL musí být nastavena pro testy");
+        MySqlPool::connect(&url)
+            .await
+            .expect("Selhalo připojení k testovací databázi")
     }
 
     async fn timed_search(pool: &MySqlPool, query: &str) -> Vec<Adresa> {
@@ -136,7 +133,10 @@ mod tests {
         let pool = get_test_pool().await;
         // Záměrně vrací empty pro překlep v kombinaci s čísly
         let results = timed_search(&pool, "Rýdlovva 1/38").await;
-        assert!(results.is_empty(), "Očekáváno prázdné výsledky pro překlep dle zadání");
+        assert!(
+            results.is_empty(),
+            "Očekáváno prázdné výsledky pro překlep dle zadání"
+        );
     }
 
     #[tokio::test]
