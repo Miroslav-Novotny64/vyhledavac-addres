@@ -203,4 +203,48 @@ mod tests {
         assert_contains_address(&results, "říčany");
         assert_contains_address(&results, "1");
     }
+
+    #[tokio::test]
+    async fn test_random_praha() {
+        let pool = get_test_pool().await;
+        let results = timed_search(&pool, "359/16 praha").await;
+        assert_contains_address(&results, "Praha");
+        assert_contains_address(&results, "Týmlova");
+    }
+
+    #[tokio::test]
+    async fn test_jiny_listopad() {
+        let pool = get_test_pool().await;
+        let results = timed_search(&pool, "17. listopadu 1380").await;
+        assert_contains_address(&results, "mladá");
+        assert_contains_address(&results, "boleslav");
+        assert_contains_address(&results, "1380");
+    }
+
+    #[tokio::test]
+    async fn test_31a() {
+        let pool = get_test_pool().await;
+        let results = timed_search(&pool, "31a praha").await;
+        assert_contains_address(&results, "praha");
+        assert_contains_address(&results, "31a");
+        assert_contains_address(&results, "zlíchově");
+    }
+
+    #[tokio::test]
+    async fn test_pluk_mraz() {
+        let pool = get_test_pool().await;
+        let results = timed_search(&pool, "pluk mraz").await;
+        assert_contains_address(&results, "plukovníka");
+        assert_contains_address(&results, "mráze");
+        assert_contains_address(&results, "praha");
+    }
+
+    #[tokio::test]
+    async fn test_pod_vrchy() {
+        let pool = get_test_pool().await;
+        let results = timed_search(&pool, "pod vrchy 950").await;
+        assert_contains_address(&results, "jindřichův");
+        assert_contains_address(&results, "hradec");
+        assert_contains_address(&results, "950");
+    }
 }

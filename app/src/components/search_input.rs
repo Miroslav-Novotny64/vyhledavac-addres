@@ -167,8 +167,8 @@ pub async fn search_adresa_impl(
         return Ok(Vec::new());
     }
 
-    let mut norm_tokens = Vec::new();
-    let mut num_tokens = Vec::new();
+    let mut text_tokens: Vec<String> = Vec::new();
+    let mut num_tokens: Vec<i32> = Vec::new();
 
     for t in tokens {
         let norm = normalize(t);
@@ -178,20 +178,38 @@ pub async fn search_adresa_impl(
 
         if let Ok(num) = norm.parse::<i32>() {
             num_tokens.push(num);
+        } else {
+            text_tokens.push(norm);
         }
-        norm_tokens.push(norm);
     }
 
-    if norm_tokens.is_empty() {
+    // Allow numeric-only queries too
+    if text_tokens.is_empty() && num_tokens.is_empty() {
         return Ok(Vec::new());
     }
 
-    let padded_tokens: Vec<String> = norm_tokens.iter().map(|t| pad_token(t)).collect();
-    let fts_query = padded_tokens
-        .iter()
-        .map(|t| format!("+{}*", t))
-        .collect::<Vec<String>>()
-        .join(" ");
+    // text: wildcard prefix, number: exact (no wildcard)
+    let mut boolean_terms: Vec<String> = Vec::new();
+
+    for t in &text_tokens {
+        let p = pad_token(t);
+        if !p.is_empty() {
+            boolean_terms.push(format!("+{}*", p));
+        }
+    }
+
+    for n in &num_tokens {
+        let p = pad_token(&n.to_string());
+        if !p.is_empty() {
+            boolean_terms.push(format!("+{}*", p)); // <- no *
+        }
+    }
+
+    if boolean_terms.is_empty() {
+        return Ok(Vec::new());
+    }
+
+    let fts_query = boolean_terms.join(" ");
 
     let mut query_builder = sqlx::QueryBuilder::new(
         "SELECT * FROM adresa WHERE MATCH(search) AGAINST(",
